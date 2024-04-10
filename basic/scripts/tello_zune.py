@@ -31,6 +31,7 @@ class TelloZune():
         self.num_frames = 0
         self.start_time = time.time()
         self.fps = 0
+        self.values_detect = []
         
     def start_tello(self):
         '''
@@ -41,11 +42,13 @@ class TelloZune():
         battery_error(self.tello.get_battery())
         self.tello.streamon()
         print("conectei teste")
+        self.tello.takeoff()
     
     def end_tello(self):
         '''
         Finaliza o drone tello.
         '''
+        self.tello.land()
         print("finalizei")
     
     def start_video(self, yolo_detect_base):
@@ -62,7 +65,7 @@ class TelloZune():
         self.tello_frame = cv2.resize(self.tello_frame, (544, 306))
 
         if yolo_detect_base:
-            base_detect_yolo.baseDetect(self.tello_frame)
+            self.values_detect = base_detect_yolo.baseDetect(self.tello_frame)
         self.calc_fps()
         cv2.imshow("video", self.tello_frame)
             
