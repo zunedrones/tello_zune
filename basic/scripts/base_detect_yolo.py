@@ -28,10 +28,7 @@ def baseDetect(frame):
 
             cv2.putText(frame, classNames[cls], org, FONT, FONTSCALE, COLOR, THICKNESS)
 
-    # if len(boxes) != 0:
-    #     return frame, x1, y1, x2, y2, len(boxes)
-    # else:
-    #     return frame, 0, 0, 0, 0, len(boxes)
-
-
-
+    if len(boxes) != 0:
+        return [frame, x1, y1, x2, y2, len(boxes)]
+    else:
+        return [frame, 0, 0, 0, 0, len(boxes)]
