@@ -10,15 +10,16 @@ prevErrorX = 0
 prevErrorY = 0
 #coeficiente proporcional (obtido testando)
 #determina o quanto a velocidade deve mudar em resposta ao erro atual
-Kp = 0.35
+Kp = 0.4
 #coeficiente derivativo (obtido testando)
 #responsável por controlar a taxa de variação do erro
-Kd = 0.35
+Kd = 0.4
 
 width_detect = 0
+width_land = 0
 
 def centralize(tello, values_detect):
-    global prevErrorX, prevErrorY, CenterX, CenterY, Kp, Kd, width_detect
+    global prevErrorX, prevErrorY, CenterX, CenterY, Kp, Kd, width_detect, width_land
     frame, x1, y1, x2, y2, detections = values_detect
     speedFB = 0
     # detectWidth = x2 - x1
@@ -27,28 +28,29 @@ def centralize(tello, values_detect):
 
     #PID - Speed Control
     width_detect = x2 - x1
-    width_land = 0
+    
     
     #se o centro da detecção encontrar-se na esquerda, o erro  na horizontal será negativo
     #se o objeto estiver na direita, o erro será positivo
     if (detections > 0):
         errorX = cxDetect - CenterX
         errorY = CenterY - cyDetect
-        if width_detect < 270:
+        if width_detect < 300:
             speedFB = 33
             print(f"WIDTH: {width_detect}")
-        if width_detect > 150:
+        if width_detect > 250:
             width_land = width_detect
     else:
         errorX = 0
         errorY = 0
         print("0 DETECTIONS")
+        print(f"width: {width_land}")
 
-        if tello.get_height() <= 30:
+        if tello.get_height() <= 23 and width_land > 250:
             print("TENTEI POUSAR")
             tello.send_rc_control(0, 0, 0, 0)
             tello.move_forward(25)
-            tello.land()
+            return False
     
     print(f"ALTURA: {tello.get_height()}")
     #velocidade de rotação em torno do próprio eixo é calculada em relação ao erro horizontal
@@ -65,5 +67,7 @@ def centralize(tello, values_detect):
     #o erro atual vira o erro anterior
     prevErrorX = errorX
     prevErrorY = errorY
+
+    return True
 
 
