@@ -6,6 +6,8 @@ import base_detect_yolo
 '''
 Class TelloZune
 -----------------------------------------------
+simulate                   # se passado ao declarar como True, inicia o modo simulacao, sem voar. Padrao = False
+-----------------------------------------------
 start_tello()               # inicializa o tello
 end_tello()                 # finaliza o tello
 start_video()               # inicia a transmissao de video do tello
@@ -27,11 +29,12 @@ class TelloZune():
     '''
     Drone tello
     '''
-    def __init__(self):
+    def __init__(self, simulate = False):
         self.num_frames = 0
         self.start_time = time.time()
         self.fps = 0
         self.values_detect = []
+        self.simulate = simulate
         
     def start_tello(self):
         '''
@@ -42,13 +45,17 @@ class TelloZune():
         battery_error(self.tello.get_battery())
         self.tello.streamon()
         print("conectei teste")
-        self.tello.takeoff()
+        if not self.simulate:
+            self.tello.takeoff()
+            self.tello.send_rc_control(0, 0, 0, 0)
     
     def end_tello(self):
         '''
         Finaliza o drone tello.
         '''
-        self.tello.land()
+        if not self.simulate:
+            self.tello.send_rc_control(0, 0, 0, 0)
+            self.tello.land()
         print("finalizei")
     
     def start_video(self, yolo_detect_base):
