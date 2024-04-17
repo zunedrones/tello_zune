@@ -14,7 +14,7 @@ def baseDetect(frame):
     Faz a deteccao da base e takeoff, utilzando modelo pre-treinado do yolov8n.
     Recebe como argumento o frame atual do video.
     '''
-    results = model(frame, conf=0.8)
+    results = model(frame, conf=0.88)
 
     for r in results:
         boxes = r.boxes
