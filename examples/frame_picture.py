@@ -1,31 +1,24 @@
 import cv2
-from djitellopy import Tello
+from tello_zune import TelloZune
 import time
 
 # inicializa e conecta com o Tello
-tello = Tello()
-tello.connect()
-print(f"Bateria: {tello.get_battery()}%")
-# comeca a transmissao de video
-tello.streamon()
+tello = TelloZune()
+tello.start_tello()
 count = 0
 
 while True: 
-    # captura cada frame do objeto frame do tello
-    frame = tello.get_frame_read().frame
-    # converte o frame em RGB para BGR
-    frame2 = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-    frame2 = cv2.resize(frame2, (544, 306))
-
+    #obtem o frame do video
+    frame = tello.get_frame() 
     #exibe na tela 'Video' cada frame obtido no laço de repeticao
-    cv2.imshow('Video', frame2) 
+    cv2.imshow('Video', frame) 
     # salva fotos da transmissao
-    cv2.imwrite(f"takeoff{count}.jpeg", frame2)
+    cv2.imwrite(f"takeoff{count}.jpeg", frame)
     count += 1
     if cv2.waitKey(1) & 0xFF == ord('q'): 
         break
     # pequeno delay de 0.5 segundos entre cada laço de repeticao
     time.sleep(0.5)
 # desliga a transmissao de video
-tello.streamoff()
+tello.end_tello()
 cv2.destroyAllWindows()
