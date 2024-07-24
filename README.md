@@ -1,4 +1,19 @@
 # tello_zune
-Biblioteca utilizada pela equipe Zune Drones para controlar o drone DJI Tello. Na pasta examples tem alguns exemplos simples de utilização do módulo tello_zune, que também está presente na pasta.
+Library used by the Zune Drones team to control the DJI Tello drone. In the examples folder, there are some simple usage examples of the tello_zune module, which is also present in the folder.
 
-Para utiizar o módulo tello_zune é necessário instalar o FFMPEG.
+
+To create the library, adaptations were made from two other existing libraries:
+* [fvilmos](https://github.com/fvilmos/tello_object_tracking)
+* [damiafuentes](https://github.com/damiafuentes/DJITelloPy)
+
+# Requeriments
+
+* Python >= 3.9.0
+  
+```bash
+pip install opencv-python
+```
+
+# How to use
+
+To use the library, simply install the dependencies and add the tello_zune.py file to the project.
