@@ -1,7 +1,5 @@
 """
 Biblioteca tello_zune, serve para controlar, e obter informacoes do drone DJI Tello.
-Essa biblioteca e uma adaptacao do codigo escrito por Vilmos Fernengel, disponivel em: <https://github.com/fvilmos/tello_object_tracking>
-E do codigo escrito por DAMIÀ FUENTES ESCOTÉ, disponivel em: <https://github.com/damiafuentes/DJITelloPy>
 """
 import time
 import threading

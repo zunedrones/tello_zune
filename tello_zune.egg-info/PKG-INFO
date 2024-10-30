@@ -1,0 +1,34 @@
+Metadata-Version: 2.1
+Name: tello_zune
+Version: 0.1
+Summary: Biblioteca tello_zune, serve para controlar, e obter informacoes do drone DJI Tello.
+Home-page: https://github.com/zunedrones/tello_zune
+Author: Zune Drones
+Author-email: zunedrones@gmail.com
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Requires-Python: >=3.6
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: opencv-python
+
+# tello_zune
+Library used by the Zune Drones team to control the DJI Tello drone. In the examples folder, there are some simple usage examples of the tello_zune module, which is also present in the folder.
+
+
+To create the library, adaptations were made from two other existing libraries:
+* [fvilmos](https://github.com/fvilmos/tello_object_tracking)
+* [damiafuentes](https://github.com/damiafuentes/DJITelloPy)
+
+# Requeriments
+
+* Python >= 3.9.0
+  
+```bash
+pip install opencv-python
+```
+
+# How to use
+
+To use the library, simply install the dependencies and add the tello_zune.py file to the project.
