@@ -5,7 +5,7 @@ from tello_zune import TelloZune
 tello = TelloZune()
 tello.start_tello()
 # cria o objeto face_detector para fazer a deteccao de faces
-face_detector = cv2.CascadeClassifier('cascades\haarcascade_frontalface_default.xml')
+face_detector = cv2.CascadeClassifier('examples/haarcascade_frontalface_default.xml')
 
 while True:
     # captura cada frame do objeto frame do tello

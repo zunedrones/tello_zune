@@ -18,7 +18,7 @@ while True:
     if cv2.waitKey(1) & 0xFF == ord('q'): 
         break
     # pequeno delay de 0.5 segundos entre cada laço de repeticao
-    time.sleep(0.5)
+    # time.sleep(0.5)
 # desliga a transmissao de video
 tello.end_tello()
 cv2.destroyAllWindows()
