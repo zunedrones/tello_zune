@@ -60,7 +60,7 @@ class TelloZune:
         self.state_value = []
     
         # image size
-        self.image_size = (640,480)
+        self.image_size = (960, 720) # Novo tamanho
 
         # return measge from UDP
         self.udp_cmd_ret = ''
@@ -110,7 +110,7 @@ class TelloZune:
         # start video thread
         self.stateThread = SafeThread(target=self.__state_receive)
 
-        self.simulate = False # Verificar
+        self.simulate = True # Verificar
         self.moves_thread = threading.Thread(target=self.readQueue) # Thread para ler a fila de comandos em paralelo
         self.stop_receiving = threading.Event() # Evento para parar de receber comandos
         self.queue_lock = threading.Lock() # Lock para a fila de comandos, assim não é alterada enquanto é lida
@@ -395,8 +395,8 @@ class TelloZune:
         """
         # Exemplo de dados do drone (substitua pelos dados reais)
         bat = self.get_battery()
-        height = float(self.tello.get_state_field("h"))
+        height = self.get_state_field('h')
         fps = self.calc_fps()
-        pres = self.get_state_field("baro")
-        time_elapsed = self.get_state_field("time")
+        pres = self.get_state_field('baro')
+        time_elapsed = self.get_state_field('time')
         return bat, height, fps, pres, time_elapsed
