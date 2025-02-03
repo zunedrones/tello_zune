@@ -16,4 +16,8 @@ pip install opencv-python
 
 # How to use
 
-To use the library, simply install the dependencies and add the tello_zune.py file to the project.
+To use the library, install with:
+
+```bash
+pip install tello_zune
+```
