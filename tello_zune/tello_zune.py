@@ -53,11 +53,14 @@ class TelloZune:
 
         self.debug = DEBUG
 
+        # fps
+        self.fps = 0
+
         # record satate value
         self.state_value = []
     
         # image size
-        self.image_size = (640,480)
+        self.image_size = (960, 720) # Novo tamanho
 
         # return measge from UDP
         self.udp_cmd_ret = ''
@@ -106,6 +109,14 @@ class TelloZune:
 
         # start video thread
         self.stateThread = SafeThread(target=self.__state_receive)
+
+        self.simulate = True # Verificar
+        self.moves_thread = threading.Thread(target=self.readQueue) # Thread para ler a fila de comandos em paralelo
+        self.stop_receiving = threading.Event() # Evento para parar de receber comandos
+        self.queue_lock = threading.Lock() # Lock para a fila de comandos, assim não é alterada enquanto é lida
+        self.command_queue = [] # Fila de comandos
+        self.moves_thread.start()
+
 
     def __video(self):
         """Video thread
@@ -220,7 +231,7 @@ class TelloZune:
         """
         self.send_cmd('streamoff')
         self.videoThread.stop()
-  
+    
     def wait_till_connected(self):
         """
         Blocking command to wait till Tello is available
@@ -294,18 +305,10 @@ class TelloZune:
             )
             self.send_cmd(cmd)
 
-    def start_tello(self):
+    def start_tello(self: object) -> None:
         '''
         Inicializa o drone tello. Conecta, testa se é possível voar, habilita a transmissão por vídeo.
         '''
-        user_input = input("Simular? (s/n): ").lower()
-        if user_input == "s":
-            self.simulate = True
-            print("Simulando...")
-        else:
-            self.simulate = False
-            print("Vamos voar...")
-
         self.wait_till_connected()
         self.start_communication()
         self.start_video()
@@ -317,7 +320,7 @@ class TelloZune:
             time.sleep(4)
             self.send_rc_control(0, 0, 0, 0)
 
-    def end_tello(self):
+    def end_tello(self: object) -> None:
         '''
         Finaliza o drone Tello. Pousa se possivel, encerra o video e a comunicacao.
         '''
@@ -328,9 +331,13 @@ class TelloZune:
         self.stop_communication()
         print("Finalizei")
 
-    def get_state_field(self, key: str):
+    def get_state_field(self, key: str) -> str:
         """Get a specific sate field by name.
         Internal method, you normally wouldn't call this yourself.
+        Args:
+            key (str): Field name
+        Returns:
+            str: Field value
         """
         state = self.state_value
 
@@ -345,16 +352,17 @@ class TelloZune:
         """
         return self.get_state_field('bat')
 
-    def start_video(self):
+    def start_video(self: object) -> None:
         '''
         Inicia a transmissão de vídeo do Tello.
         '''
         self.send_cmd('streamon')
         if self.videoThread.is_alive() is False:  self.videoThread.start()
         
-    def calc_fps(self, frame):
-        """
-        Calcula o FPS do video, e exibe na tela o FPS e a porcentagem da bateria.
+    def calc_fps(self: object) -> int:
+        """Calcula o FPS do video
+        Returns:
+            int: FPS
         """
         self.num_frames += 1
         self.elapsed_time = time.time() - self.start_time
@@ -362,5 +370,33 @@ class TelloZune:
             self.fps = int(self.num_frames / self.elapsed_time)
             self.num_frames = 0
             self.start_time = time.time() 
-        cv2.putText(frame, f"FPS: {self.fps}", ORG, FONT, FONTSCALE, COLOR, THICKNESS)
-        cv2.putText(frame, f"Battery: {self.get_battery()}", (450, 450), FONT, FONTSCALE, COLOR, THICKNESS)
+        return self.fps
+    
+    def readQueue(self: object) -> None:
+        """Lê a fila de comandos e envia-os ao drone Tello.
+        Args:
+            tello: Objeto TelloZune
+        """
+        while not self.stop_receiving.is_set():
+            command = None
+            with self.queue_lock:   # Evita que a lista seja alterada enquanto é lida
+                if self.command_queue:
+                    command = self.command_queue.pop(0)
+            if command:        # Se houver comando na fila
+                response = self.send_cmd_return(command)
+                time.sleep(3)
+                print(f"{command}, {response}")
+            time.sleep(3)
+
+    def get_info(self: object) -> tuple:
+        """Retorna informações do drone.
+        Returns:
+            tuple: (bateria, altura, fps, pressão, tempo decorrido)
+        """
+        # Exemplo de dados do drone (substitua pelos dados reais)
+        bat = self.get_battery()
+        height = self.get_state_field('h')
+        fps = self.calc_fps()
+        pres = self.get_state_field('baro')
+        time_elapsed = self.get_state_field('time')
+        return bat, height, fps, pres, time_elapsed
