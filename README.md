@@ -19,5 +19,5 @@ pip install opencv-python
 To use the library, install with:
 
 ```bash
-pip install tello_zune
+pip install tello-zune
 ```
