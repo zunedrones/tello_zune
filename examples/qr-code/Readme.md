@@ -2,11 +2,6 @@
 ### Instalação
 
 ```bash
-# Clone o repositório
-git clone https://github.com/heltonmaia/proj_drone_tello
-```
-
-```bash
 # Instalar dependências
 pip install opencv-python
 pip install pyzbar
