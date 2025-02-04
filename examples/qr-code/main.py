@@ -2,25 +2,6 @@ import cv2
 from tello_zune import TelloZune
 import modules.tello_control as tello_control
 import time
-"""
-Módulo principal para controle do drone Tello.
-Este arquivo inicializa a captura de vídeo, faz as configurações iniciais e direciona o fluxo de controle do drone.
-
-Funcionalidades principais:
-- Captura e exibição de vídeo em tempo real.
-- Processamento de QR codes para controle do drone.
-- Decolagem, pouso, busca e movimentação com base nos comandos recebidos.
-- Registro de todos os comandos enviados ao drone em um arquivo de log.
-
-Módulos utilizados:
-- tello_control: Contém funções para movimentação e lógica de controle.
-- tracking_base: Funções para detectar e seguir QR codes.
-- qr_processing: Processamento de QR codes.
-- utils: Configuração de logging.
-
-Como executar:
-- Execute o arquivo main.py já conectado à rede Wi-Fi do drone Tello.
-"""
 
 # Inicialização
 #cap = cv2.VideoCapture(0) # Captura de vídeo da webcam
