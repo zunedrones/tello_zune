@@ -16,7 +16,7 @@ try:
         frame = tello.get_frame()
         cv2.putText(frame, f"FPS: {tello.calc_fps()}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (10, 255, 0), 2)
         cv2.putText(frame, f"Bat: {tello.get_battery()}%", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 1, (10, 255, 0), 2)
-        #frame = cv2.resize(frame, (960, 720))
+        #frame = cv2.resize(frame, (960, 720)) # Necessário caso esteja usando a webcam
 
         # Tratamento
         frame = tello_control.moves(tello, frame)
