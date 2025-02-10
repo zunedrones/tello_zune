@@ -309,11 +309,12 @@ class TelloZune:
         '''
         Inicializa o drone tello. Conecta, testa se é possível voar, habilita a transmissão por vídeo.
         '''
-        self.wait_till_connected()
-        self.start_communication()
-        self.start_video()
-        print("Conectei ao Tello")
-        print("Abrindo vídeo do Tello")
+        if not self.receiverThread.is_alive(): # Se a thread de recebimento não estiver ativa
+            self.wait_till_connected()
+            self.start_communication()
+            self.start_video()
+            print("Conectei ao Tello")
+            print("Abrindo vídeo do Tello")
 
         if not self.simulate:
             self.send_cmd("takeoff")
@@ -324,9 +325,9 @@ class TelloZune:
         '''
         Finaliza o drone Tello. Pousa se possivel, encerra o video e a comunicacao.
         '''
-        if not self.simulate:
-            self.send_rc_control(0, 0, 0, 0)
-            self.send_cmd("land")
+        while float(self.get_state_field('h')) >= 13:
+            self.send_rc_control(0, 0, -70, 0)
+        self.send_cmd("land")
         self.stop_video()
         self.stop_communication()
         print("Finalizei")
@@ -391,12 +392,11 @@ class TelloZune:
     def get_info(self: object) -> tuple:
         """Retorna informações do drone.
         Returns:
-            tuple: (bateria, altura, fps, pressão, tempo decorrido)
+            tuple: (bateria, altura, temperatura máxima, pressão, tempo decorrido)
         """
-        # Exemplo de dados do drone (substitua pelos dados reais)
-        bat = self.get_battery()
+        bat = self.get_state_field('bat')
         height = self.get_state_field('h')
-        fps = self.calc_fps()
+        temph = self.get_state_field('temph')
         pres = self.get_state_field('baro')
         time_elapsed = self.get_state_field('time')
-        return bat, height, fps, pres, time_elapsed
+        return bat, height, temph, pres, time_elapsed
