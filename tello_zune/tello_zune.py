@@ -4,15 +4,24 @@ Biblioteca tello_zune, serve para controlar, e obter informacoes do drone DJI Te
 import time
 import threading
 import cv2
+import numpy as np
 
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 COLOR = (0, 255, 0)
-ORG = (30, 30)
-FONTSCALE = 1
-THICKNESS = 2
-WIDTH = 544
-HEIGHT = 306
 
+WIDTH = 960
+HEIGHT = 720
+
+ORG = (30, 30)
+ORG_FPS = (10, 30)  # Canto superior esquerdo
+ORG_BAT = (WIDTH - 200, HEIGHT - 10)  # Canto inferior direito
+ORG_INFO = (10, HEIGHT - 90)  # Canto inferior esquerdo
+
+FONTSCALE = 1
+FONTSCALE_SMALL = 0.6
+THICKNESS = 2
+THICKNESS_SMALL = 1
+LINE_SPACING = 20 # Espaço entre linhas, para exibição de dados
 
 class SafeThread(threading.Thread):
     """
@@ -36,11 +45,16 @@ class SafeThread(threading.Thread):
 
 
 class TelloZune:
+    """
+    Classe para controlar o drone DJI Tello.
+    Args:
+        simulate (bool, optional): Se True, inicia no modo de simulação, o drone não decola. Padrão em True.
+    """
     import socket
     import cv2
     from queue import Queue
 
-    def __init__(self,TELLOIP='192.168.10.1', UDPPORT=8889, VIDEO_SOURCE="udp://@0.0.0.0:11111", UDPSTATEPORT=8890, DEBUG=False) -> None:
+    def __init__(self, simulate=True, TELLOIP='192.168.10.1', UDPPORT=8889, VIDEO_SOURCE="udp://@0.0.0.0:11111", UDPSTATEPORT=8890, DEBUG=False) -> None:
 
         global drones
 
@@ -60,7 +74,7 @@ class TelloZune:
         self.state_value = []
     
         # image size
-        self.image_size = (960, 720) # Novo tamanho
+        self.image_size = (WIDTH, HEIGHT) 
 
         # return measge from UDP
         self.udp_cmd_ret = ''
@@ -110,7 +124,8 @@ class TelloZune:
         # start video thread
         self.stateThread = SafeThread(target=self.__state_receive)
 
-        self.simulate = True # Verificar
+        self.simulate = simulate
+
         self.moves_thread = threading.Thread(target=self.readQueue) # Thread para ler a fila de comandos em paralelo
         self.stop_receiving = threading.Event() # Evento para parar de receber comandos
         self.queue_lock = threading.Lock() # Lock para a fila de comandos, assim não é alterada enquanto é lida
@@ -304,7 +319,25 @@ class TelloZune:
                 yaw_velocity
             )
             self.send_cmd(cmd)
-
+    
+    def takeoff(self: object) -> None:
+        """
+        Decola o drone Tello.
+        """
+        self.send_cmd("takeoff")
+        time.sleep(4)
+        self.send_rc_control(0, 0, 0, 0)
+    
+    def land(self: object) -> None:
+        """
+        Pousa o drone Tello.
+        """
+        while float(self.get_state_field('tof')) >= 30:
+            self.send_rc_control(0, 0, -70, 0)
+        self.send_rc_control(0, 0, 0, 0)
+        self.send_cmd("land")
+        #time.sleep(4)
+        
     def start_tello(self: object) -> None:
         '''
         Inicializa o drone tello. Conecta, testa se é possível voar, habilita a transmissão por vídeo.
@@ -317,18 +350,15 @@ class TelloZune:
             print("Abrindo vídeo do Tello")
 
         if not self.simulate:
-            self.send_cmd("takeoff")
-            time.sleep(4)
-            self.send_rc_control(0, 0, 0, 0)
+            self.takeoff()
 
     def end_tello(self: object) -> None:
         '''
         Finaliza o drone Tello. Pousa se possivel, encerra o video e a comunicacao.
         '''
-        while float(self.get_state_field('h')) >= 13:
-            self.send_rc_control(0, 0, -70, 0)
-        self.send_cmd("land")
         self.stop_video()
+        if not self.simulate:
+            self.land()
         self.stop_communication()
         print("Finalizei")
 
@@ -395,8 +425,50 @@ class TelloZune:
             tuple: (bateria, altura, temperatura máxima, pressão, tempo decorrido)
         """
         bat = self.get_state_field('bat')
-        height = self.get_state_field('h')
+        height = self.get_state_field('tof')
         temph = self.get_state_field('temph')
         pres = self.get_state_field('baro')
         time_elapsed = self.get_state_field('time')
         return bat, height, temph, pres, time_elapsed
+    
+    def write_info(self, frame: np.ndarray, fps: bool = False, bat: bool = False,
+                   height: bool = False, temph: bool = False, pres: bool = False,
+                   time_elapsed: bool = False) -> None:
+        """Escreve informações no frame atual, posicionadas corretamente.
+        
+        Args:
+            frame (MatLike): Frame do vídeo
+            fps (bool): Escrever FPS (canto superior esquerdo)
+            bat (bool): Escrever bateria (canto inferior direito)
+            height (bool): Escrever altura (canto inferior esquerdo, reduzido)
+            temph (bool): Escrever temperatura máxima (canto inferior esquerdo, reduzido)
+            pres (bool): Escrever pressão (canto inferior esquerdo, reduzido)
+            time_elapsed (bool): Escrever tempo decorrido (canto inferior esquerdo, reduzido)
+        """
+
+        if fps:
+            cv2.putText(frame, f"FPS: {self.calc_fps()}", ORG_FPS, FONT, FONTSCALE, COLOR, THICKNESS)
+
+        if bat:
+            cv2.putText(frame, f"Battery: {self.get_battery()}%", ORG_BAT, FONT, FONTSCALE, COLOR, THICKNESS)
+
+        y_offset = 0  # Para organizar as informações na parte inferior esquerda
+
+        if height:
+            cv2.putText(frame, f"{self.get_state_field('tof')}cm",
+                        (ORG_INFO[0], ORG_INFO[1] + y_offset), FONT, FONTSCALE_SMALL, COLOR, THICKNESS_SMALL)
+            y_offset += LINE_SPACING
+
+        if temph:
+            cv2.putText(frame, f"{self.get_state_field('temph')} C",
+                        (ORG_INFO[0], ORG_INFO[1] + y_offset), FONT, FONTSCALE_SMALL, COLOR, THICKNESS_SMALL)
+            y_offset += LINE_SPACING
+
+        if pres:
+            cv2.putText(frame, f"{self.get_state_field('baro')}hPa",
+                        (ORG_INFO[0], ORG_INFO[1] + y_offset), FONT, FONTSCALE_SMALL, COLOR, THICKNESS_SMALL)
+            y_offset += LINE_SPACING
+
+        if time_elapsed:
+            cv2.putText(frame, f"{self.get_state_field('time')}s",
+                        (ORG_INFO[0], ORG_INFO[1] + y_offset), FONT, FONTSCALE_SMALL, COLOR, THICKNESS_SMALL)

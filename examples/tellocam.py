@@ -1,15 +1,13 @@
 import cv2
 from tello_zune import TelloZune
 
-tello = TelloZune()
+tello = TelloZune(simulate=False)
 tello.start_tello()
 
 while True:
     img = tello.get_frame()
-    tello.calc_fps(img)
 
-    # para fazer o drone realizar movimentos:
-    # tello.send_rc_control(0, 0, 0, 0)
+    tello.write_info(img, fps=True, bat=True, height=True, temph=True, pres=True, time_elapsed=True)
 
     cv2.imshow('Tello', img)
 
