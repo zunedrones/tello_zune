@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="tello_zune",
-    version="0.4",
+    version="0.5",
     author="Zune Drones",
     author_email="zunedrones@gmail.com",
     description="Biblioteca tello-zune, serve para controlar, e obter informacoes do drone DJI Tello.",
@@ -17,7 +17,7 @@ setup(
     ],
     python_requires='>=3.9',
     install_requires=[
-        'opencv-python'
+        'opencv-python',
         'numpy'
     ],
 )

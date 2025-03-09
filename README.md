@@ -9,7 +9,11 @@ To create the library, adaptations were made from two other existing libraries:
 # Requeriments
 
 * Python >= 3.9.0
-  
+
+```bash
+pip install numpy
+```
+
 ```bash
 pip install opencv-python
 ```
