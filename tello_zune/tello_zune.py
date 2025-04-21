@@ -5,6 +5,7 @@ import time
 import threading
 import cv2
 import numpy as np
+from queue import Queue, Empty
 
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 COLOR = (0, 255, 0)
@@ -25,144 +26,119 @@ LINE_SPACING = 20 # Espaço entre linhas, para exibição de dados
 
 class SafeThread(threading.Thread):
     """
-    Safe cyclic thread, with stop function 
-    Args:
-        threading (Thread): Thred object
+    Thread cíclica segura, com evento de parada.
+    Target deve ser uma callable sem argumentos.
     """
-
-    def __init__(self, target):
-        threading.Thread.__init__(self)
-        self.daemon = True
+    def __init__(self, target: callable, name: str = None):
+        super().__init__(daemon=True, name=name)
         self.target = target
-        self.stop_ev = threading.Event()
+        self.stop_ev = threading.Event() # Evento de parada
 
-    def stop(self):
+    def stop(self) -> None:
         self.stop_ev.set()
 
-    def run(self):
+    def run(self) -> None:
         while not self.stop_ev.is_set():
-            self.target()
-
+            try:
+                self.target()
+            except Exception as e:
+                print(f"Error in {self.name}: {e}")
 
 class TelloZune:
     """
     Classe para controlar o drone DJI Tello.
     Args:
-        simulate (bool, optional): Se True, inicia no modo de simulação, o drone não decola. Padrão em True.
+        simulate (bool, optional): Se True, inicia no modo de simulação. Padrão: True.
     """
-    import socket
-    import cv2
-    from queue import Queue
-
-    def __init__(self, simulate=True, TELLOIP='192.168.10.1', UDPPORT=8889, VIDEO_SOURCE="udp://@0.0.0.0:11111", UDPSTATEPORT=8890, DEBUG=False) -> None:
-
-        global drones
-
-        self.localaddr = ('',UDPPORT)
-        self.telloaddr = (TELLOIP,UDPPORT)
+    def __init__(
+        self,
+        simulate: bool = True,
+        TELLOIP: str = '192.168.10.1',
+        UDPPORT: int = 8889,
+        VIDEO_SOURCE: str = "udp://@0.0.0.0:11111",
+        UDPSTATEPORT: int = 8890,
+        DEBUG: bool = False,
+    ) -> None:
+        # Endereços UDP
+        self.localaddr = ('', UDPPORT)
+        self.telloaddr = (TELLOIP, UDPPORT)
+        self.stateaddr = ('', UDPSTATEPORT)
         self.video_source = VIDEO_SOURCE
-        self.stateaddr = ('',UDPSTATEPORT)
-        self.num_frames = 0
-        self.start_time = time.time()
 
+        # Estado interno
         self.debug = DEBUG
-
-        # fps
         self.fps = 0
-
-        # record satate value
-        self.state_value = []
-    
-        # image size
-        self.image_size = (WIDTH, HEIGHT) 
-
-        # return measge from UDP
+        self.state_value: list[str] = []
+        self.image_size: tuple[int, int] = (WIDTH, HEIGHT)
+        self.start_time = time.time()
+        self.num_frames = 0
+        self.elapsed_time = 0
+        self.last_rc_control_timestamp = 0
         self.udp_cmd_ret = ''
+        self.TIME_BTW_RC_CONTROL_COMMANDS = 0.001  # Intervalo entre comandos de controle remoto
 
-        # store a single image
-        self.q = self.Queue()
-        self.q.maxsize = 1
+        # Fila de frames
+        self.q = Queue(maxsize=1)
+        self.frame: np.ndarray | None = None
 
-        # store a single image
-        self.frame = None
-        self.last_rc_control_timestamp = time.time()  # Inicializa o timestamp do controle remoto
-        self.TIME_BTW_RC_CONTROL_COMMANDS = 0.001  # in seconds
-        
-        # scheduler counter
-        self.count = 1
+        # Fila de comandos
+        self.command_queue: Queue[str] = Queue()
 
-        # command received event
+        # Eventos e contadores
         self.cmd_recv_ev = threading.Event()
-
-        # timer event
         self.timer_ev = threading.Event()
+        self.count = 1
+        self.eventlist: list[dict] = []
+        self.eventlist.append({'cmd': 'command', 'period': 100, 'info': '', 'val': ''})
 
-        # periodic commands handler
-        self.eventlist = list()
-
-        # add first periodic command to be sent, keep-alive
-        self.eventlist.append({'cmd':'command','period':100,'info':''})
-
-        # # create UDP packet, for commands
-        self.sock_cmd = self.socket.socket(self.socket.AF_INET, self.socket.SOCK_DGRAM)
+        # Sockets
+        import socket
+        self.sock_cmd = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock_cmd.bind(self.localaddr)
-
-        # tello state
-        self.sock_state = self.socket.socket(self.socket.AF_INET, self.socket.SOCK_DGRAM)
+        self.sock_state = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock_state.bind(self.stateaddr)
 
-        # start receive thread
-        self.receiverThread = SafeThread(target=self.__receive)
-        #self.receiverThread.daemon = True
-        
-        # send periodic commands
-        self.eventThread = SafeThread(target=self.__periodic_cmd)
-        
-        # start video thread
-        self.videoThread = SafeThread(target=self.__video)
+        # Threads seguras
+        self.receiverThread = SafeThread(target=self.__receive, name="ReceiverThread")
+        self.eventThread = SafeThread(target=self.__periodic_cmd, name="PeriodicCmdThread")
+        self.videoThread = SafeThread(target=self.__video, name="VideoThread")
+        self.stateThread = SafeThread(target=self.__state_receive, name="StateReceiveThread")
+        self.movesThread = SafeThread(target=self.__read_queue, name="CommandQueueThread")
 
-        # start video thread
-        self.stateThread = SafeThread(target=self.__state_receive)
-
+        # Inicialização
         self.simulate = simulate
+        self.receiverThread.start()
+        self.eventThread.start()
+        self.stateThread.start()
+        self.videoThread.start()
+        self.movesThread.start()
 
-        self.moves_thread = threading.Thread(target=self.readQueue) # Thread para ler a fila de comandos em paralelo
-        self.stop_receiving = threading.Event() # Evento para parar de receber comandos
-        self.queue_lock = threading.Lock() # Lock para a fila de comandos, assim não é alterada enquanto é lida
-        self.command_queue = [] # Fila de comandos
-        self.moves_thread.start()
-
-
-    def __video(self):
-        """Video thread
-        """
-        # stream handling
+    def __video(self) -> None:
+        """Thread de vídeo."""
         self.video = self.cv2.VideoCapture(self.video_source)
-        while True:
+        while not self.stop_ev.is_set(): 
+            ret, frame = self.video.read()
+            if not ret:
+                break
+            frame = cv2.resize(frame, self.image_size)
+            self.frame = frame
             try:
-                # frame from stream
-                ret, frame = self.video.read()
-                if ret:
-                    frame = self.cv2.resize(frame, self.image_size)
-                    self.frame = frame
-                    if not self.q.full():
-                        self.q.put(frame)
-            except Exception as e:
-                print(f"Error in __video thread: {e}")
+                self.q.put(frame, block=False)
+            except:
+                pass
 
-    def add_periodic_event(self,cmd,period,info=''):
-        """Add periodic commands to the list
-
+    def add_periodic_event(self, cmd: str, period: int, info: str = "") -> None:
+        """
+        Adiciona evento periódico.
         Args:
-            cmd (str): see tello SDK for command 
-            period (cycle time): time interval for recurrent mesages
-            info (str, optional): Hols a description of the command
+            cmd (str): Comando a ser enviado
+            period (int): Período em frames
+            info (str): Informação adicional
         """
-        self.eventlist.append({'cmd':str(cmd),'period':int(period),'info':str(info), 'val':str("")})
+        self.eventlist.append({'cmd': str(cmd), 'period': int(period), 'info': str(info), 'val': str("")})
 
-    def __periodic_cmd(self):
-        """Thread to send periodic commands
-        """
+    def __periodic_cmd(self) -> None:
+        """Thread para enviar comandos periódicos."""
         try:
 
             for ev in self.eventlist:
@@ -173,10 +149,6 @@ class TelloZune:
                     cmd = ev['cmd']
                     info = ev['info']
                     ret = self.send_cmd_return(cmd).rstrip()
-                    # if self.debug:
-                    #     print (str(cmd) + ": " + str(ret))
-
-                    #update info field
                     ev['val'] = str(ret)
                 
             # scheduler base time ~ 100 ms
@@ -186,125 +158,123 @@ class TelloZune:
         except Exception:
             pass
 
-    def __receive(self):
-        """Receive UDP return string
-        """
+    def __receive(self) -> None:
+        """Recebe strings de resposta de comando."""
         try:
             data, _ = self.sock_cmd.recvfrom(2048)
             self.udp_cmd_ret = data.decode(encoding="utf-8")
             self.cmd_recv_ev.set()
-        except Exception:
+        except:
             pass
 
-    def __state_receive(self):
-        """Receive UDP return string
-        """
+    def __state_receive(self) -> None:
+        """Recebe strings de estado."""
         data, _ = self.sock_state.recvfrom(512)
         val = data.decode(encoding="utf-8").rstrip()
+        self.state_value = val.replace(';', ':').split(':')
 
-        # data split
-        self.state_value = val.replace(';',':').split(':')
+    def __read_queue(self) -> None:
+        """Lê comandos da fila e envia ao drone."""
+        while not self.stop_ev.is_set(): # Verifica se a thread deve parar
+            try:
+                cmd = self.command_queue.get(timeout=1)
+                resp = self.send_cmd_return(cmd)
+                time.sleep(3)
+                print(f"{cmd}, {resp}")
+            except Empty:
+                continue
 
-    def set_image_size(self, image_size=(960,720)):
-        """Set size of the aptured image
+    def add_command(self, command: str) -> None:
+        """Enfileira um comando."""
+        try:
+            self.command_queue.put(command)
+            print(f"Comando enfileirado: {command}")
+        except Exception as e:
+            print(f"Erro ao adicionar comando: {e}")
 
+    def set_image_size(self, image_size: tuple[int, int] = (960, 720)) -> None:
+        """
+        Define tamanho da imagem.
         Args:
-            image_size (tuple, optional): Retun image size. Defaults to (960,720).
+            image_size (tuple): Tamanho da imagem (largura, altura)
         """
         self.image_size = image_size
 
-    def get_frame(self):
-        """get frame from queue
-
-        Returns:
-            (w,h,3) array: 920x720 RGB frame
+    def get_frame(self) -> np.ndarray:
         """
-        #return self.frame
+        Retorna próximo frame da fila.
+        Returns:
+            np.ndarray: Frame do vídeo
+        """
         return self.q.get()
 
-    def stop_communication(self):
-        """Close commnucation threads
-        """
-        self.receiverThread.stop()
-        self.stateThread.stop()
-        self.eventThread.stop()
-
-        # close the socket too
+    def stop_communication(self) -> None:
+        """Para threads e fecha sockets."""
+        for thread in (self.receiverThread, self.eventThread, self.videoThread, self.stateThread, self.movesThread):
+            thread.stop()
         self.sock_cmd.close()
+        self.sock_state.close()
 
-    def start_communication(self):
-        """Start low level communication
-        """
-        # start communication / listens to UDP
-        if self.receiverThread.is_alive() is not True: self.receiverThread.start()
-        if self.eventThread.is_alive() is not True:  self.eventThread.start()
-        if self.stateThread.is_alive() is not True:  self.stateThread.start()
-        
+    def start_communication(self) -> None:
+        """(Re)inicia threads de comunicação."""
+        for thread in (self.receiverThread, self.eventThread, self.stateThread):
+            if not thread.is_alive():
+                thread.start()
 
-    def stop_video(self):
-        """Stop video stream
-        """
+    def stop_video(self) -> None:
+        """Stop video stream"""
         self.send_cmd('streamoff')
         self.videoThread.stop()
     
-    def wait_till_connected(self):
+    def wait_till_connected(self) -> None:
         """
-        Blocking command to wait till Tello is available
-        Use this command at program startup, to determin connection status
+        Bloqueia a execução até que o drone Tello esteja conectado.
+        Use este método no início do seu código para garantir que o drone esteja pronto para receber comandos.
         """
         self.receiverThread.start()
 
-        while True:
+        while not self.stop_ev.is_set(): 
             try:
                 ret = self.send_cmd_return('command')
-                
-                # force tello to 'DEBUG' mode
-                if self.debug== True: ret = "OK"
-
+                if self.debug== True: ret = "OK" # debug mode
             except Exception:
                 exit()
             if str(ret) != 'None':
                 break
 
-    def send_cmd_return(self,cmd):
-        """Send a command to Tello over UDP, wait for the return value
-
-        Args:
-            cmd (str): See Tello SDK for walid commands
-
-        Returns:
-            [str]: UPD aswer to the emmited command, see Tello SDK for valid answers
+    def send_cmd_return(self, cmd: str) -> str:
         """
-        # send cmd over UDP
-        self.udp_cmd_ret = None
-        cmd = cmd.encode(encoding="utf-8")
-        _ = self.sock_cmd.sendto(cmd, self.telloaddr)
+        Envia um comando para o drone Tello via UDP e espera pela resposta.
+        O comando é enviado via UDP e a resposta é recebida na mesma conexão.
+        Args:
+            cmd (str): Comando a ser enviado para o drone.
+        Returns:
+            str: Resposta do drone. Verifique a documentação do SDK do Tello para os comandos válidos.
+        """
+        self.udp_cmd_ret = None # Reseta o retorno do comando
+        cmd = cmd.encode(encoding="utf-8") # Codifica o comando para bytes
+        _ = self.sock_cmd.sendto(cmd, self.telloaddr) # Envia o comando via UDP
 
-        # wait for ans answer over UDP
-        self.cmd_recv_ev.wait(0.3)
- 
-        # prepare for next received message
-        self.cmd_recv_ev.clear()
-        
+        self.cmd_recv_ev.wait(0.3) # Espera pela resposta do drone
+        self.cmd_recv_ev.clear() # Limpa o evento de resposta
+
         return self.udp_cmd_ret
     
-    def send_cmd(self,cmd):
-        """Send a command to Tello over UDP, do not wait for the return value
-
+    def send_cmd(self, cmd: str) -> None:
+        """
+        Envia um comando para o drone Tello via UDP. Não espera pela resposta.
         Args:
             cmd (str): See Tello SDK for walid commands
-
-        Returns:
-            [str]: UPD aswer to the emmited command, see Tello SDK for valid answers
         """
-        # send cmd over UDP
         cmd = cmd.encode(encoding="utf-8")
         _ = self.sock_cmd.sendto(cmd, self.telloaddr)
 
     def send_rc_control(self, left_right_velocity: int, forward_backward_velocity: int, up_down_velocity: int,
-                        yaw_velocity: int):
-        """Send RC control via four channels. Command is sent every self.TIME_BTW_RC_CONTROL_COMMANDS seconds.
-        Arguments:
+                        yaw_velocity: int) -> None:
+        """
+        Envia comandos de controle remoto para o drone, enviados a cada 0.001 segundos, para evitar sobrecarga de comandos.
+        Intervalo pode ser ajustado por meio da variável TIME_BTW_RC_CONTROL_COMMANDS.
+        Args:
             left_right_velocity: -100~100 (left/right)
             forward_backward_velocity: -100~100 (forward/backward)
             up_down_velocity: -100~100 (up/down)
@@ -320,28 +290,22 @@ class TelloZune:
             )
             self.send_cmd(cmd)
     
-    def takeoff(self: object) -> None:
-        """
-        Decola o drone Tello.
-        """
+    def takeoff(self) -> None:
+        """Decola o drone Tello."""
         self.send_cmd("takeoff")
         time.sleep(4)
-        self.send_rc_control(0, 0, 0, 0)
     
-    def land(self: object) -> None:
-        """
-        Pousa o drone Tello.
-        """
+    def land(self) -> None:
+        """Pousa o drone Tello."""
         while float(self.get_state_field('tof')) >= 30:
             self.send_rc_control(0, 0, -70, 0)
-        self.send_rc_control(0, 0, 0, 0)
         self.send_cmd("land")
         #time.sleep(4)
         
-    def start_tello(self: object) -> None:
-        '''
+    def start_tello(self) -> None:
+        """
         Inicializa o drone tello. Conecta, testa se é possível voar, habilita a transmissão por vídeo.
-        '''
+        """
         if not self.receiverThread.is_alive(): # Se a thread de recebimento não estiver ativa
             self.wait_till_connected()
             self.start_communication()
@@ -352,19 +316,20 @@ class TelloZune:
         if not self.simulate:
             self.takeoff()
 
-    def end_tello(self: object) -> None:
-        '''
+    def end_tello(self) -> None:
+        """
         Finaliza o drone Tello. Pousa se possivel, encerra o video e a comunicacao.
-        '''
+        """
         self.stop_video()
         if not self.simulate:
+            print("Pousando")
             self.land()
         self.stop_communication()
         print("Finalizei")
 
     def get_state_field(self, key: str) -> str:
-        """Get a specific sate field by name.
-        Internal method, you normally wouldn't call this yourself.
+        """
+        Retorna o valor de um campo específico do estado do drone.
         Args:
             key (str): Field name
         Returns:
@@ -377,21 +342,21 @@ class TelloZune:
             return state[index]
 
     def get_battery(self) -> int:
-        """Get current battery percentage
+        """Retorna o nível da bateria do drone.
         Returns:
             int: 0-100
         """
         return self.get_state_field('bat')
 
-    def start_video(self: object) -> None:
-        '''
+    def start_video(self) -> None:
+        """
         Inicia a transmissão de vídeo do Tello.
-        '''
+        """
         self.send_cmd('streamon')
         if self.videoThread.is_alive() is False:  self.videoThread.start()
         
-    def calc_fps(self: object) -> int:
-        """Calcula o FPS do video
+    def calc_fps(self) -> int:
+        """Calcula o FPS do vídeo
         Returns:
             int: FPS
         """
@@ -402,25 +367,10 @@ class TelloZune:
             self.num_frames = 0
             self.start_time = time.time() 
         return self.fps
-    
-    def readQueue(self: object) -> None:
-        """Lê a fila de comandos e envia-os ao drone Tello.
-        Args:
-            tello: Objeto TelloZune
-        """
-        while not self.stop_receiving.is_set():
-            command = None
-            with self.queue_lock:   # Evita que a lista seja alterada enquanto é lida
-                if self.command_queue:
-                    command = self.command_queue.pop(0)
-            if command:        # Se houver comando na fila
-                response = self.send_cmd_return(command)
-                time.sleep(3)
-                print(f"{command}, {response}")
-            time.sleep(3)
 
-    def get_info(self: object) -> tuple:
-        """Retorna informações do drone.
+    def get_info(self) -> tuple:
+        """
+        Retorna informações do drone.
         Returns:
             tuple: (bateria, altura, temperatura máxima, pressão, tempo decorrido)
         """
@@ -434,8 +384,9 @@ class TelloZune:
     def write_info(self, frame: np.ndarray, fps: bool = False, bat: bool = False,
                    height: bool = False, temph: bool = False, pres: bool = False,
                    time_elapsed: bool = False) -> None:
-        """Escreve informações no frame atual, posicionadas corretamente.
-        
+        """
+        Escreve informações no frame atual, posicionadas corretamente.
+
         Args:
             frame (MatLike): Frame do vídeo
             fps (bool): Escrever FPS (canto superior esquerdo)
@@ -472,3 +423,5 @@ class TelloZune:
         if time_elapsed:
             cv2.putText(frame, f"{self.get_state_field('time')}s",
                         (ORG_INFO[0], ORG_INFO[1] + y_offset), FONT, FONTSCALE_SMALL, COLOR, THICKNESS_SMALL)
+
+
