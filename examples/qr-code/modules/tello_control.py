@@ -26,7 +26,7 @@ def search(tello: object):
     commands = ['ccw 20', 'cw 50']
     while not stop_searching.is_set() and not tello.stop_receiving.is_set() and enable_search:
         if time.time() - timer >= 10:                # 10 segundos
-            tello._add_command(commands[i])          # Rotaciona
+            tello.add_command(commands[i])          # Rotaciona
             time.sleep(0.1)                          # Testar se resposta é exibida
             print(f"{commands[i]}, {response}")
             log_messages.append(f"{commands[i]}, {response}\n")
