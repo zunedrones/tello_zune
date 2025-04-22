@@ -115,8 +115,8 @@ class TelloZune:
 
     def __video(self) -> None:
         """Thread de vídeo."""
-        self.video = self.cv2.VideoCapture(self.video_source)
-        while not self.stop_ev.is_set(): 
+        self.video = cv2.VideoCapture(self.video_source)
+        while True:
             ret, frame = self.video.read()
             if not ret:
                 break
@@ -150,10 +150,10 @@ class TelloZune:
                     info = ev['info']
                     ret = self.send_cmd_return(cmd).rstrip()
                     ev['val'] = str(ret)
-                
+
             # scheduler base time ~ 100 ms
             self.timer_ev.wait(0.1)
-                
+
             self.count +=1
         except Exception:
             pass
@@ -175,7 +175,7 @@ class TelloZune:
 
     def __read_queue(self) -> None:
         """Lê comandos da fila e envia ao drone."""
-        while not self.stop_ev.is_set(): # Verifica se a thread deve parar
+        while True:
             try:
                 cmd = self.command_queue.get(timeout=1)
                 resp = self.send_cmd_return(cmd)
@@ -225,7 +225,7 @@ class TelloZune:
         """Stop video stream"""
         self.send_cmd('streamoff')
         self.videoThread.stop()
-    
+
     def wait_till_connected(self) -> None:
         """
         Bloqueia a execução até que o drone Tello esteja conectado.
@@ -233,7 +233,7 @@ class TelloZune:
         """
         self.receiverThread.start()
 
-        while not self.stop_ev.is_set(): 
+        while self.receiverThread.is_alive():
             try:
                 ret = self.send_cmd_return('command')
                 if self.debug== True: ret = "OK" # debug mode
@@ -259,7 +259,7 @@ class TelloZune:
         self.cmd_recv_ev.clear() # Limpa o evento de resposta
 
         return self.udp_cmd_ret
-    
+
     def send_cmd(self, cmd: str) -> None:
         """
         Envia um comando para o drone Tello via UDP. Não espera pela resposta.
@@ -289,7 +289,7 @@ class TelloZune:
                 yaw_velocity
             )
             self.send_cmd(cmd)
-    
+
     def takeoff(self) -> None:
         """Decola o drone Tello."""
         self.send_cmd("takeoff")
@@ -301,7 +301,7 @@ class TelloZune:
             self.send_rc_control(0, 0, -70, 0)
         self.send_cmd("land")
         #time.sleep(4)
-        
+
     def start_tello(self) -> None:
         """
         Inicializa o drone tello. Conecta, testa se é possível voar, habilita a transmissão por vídeo.
@@ -354,7 +354,7 @@ class TelloZune:
         """
         self.send_cmd('streamon')
         if self.videoThread.is_alive() is False:  self.videoThread.start()
-        
+
     def calc_fps(self) -> int:
         """Calcula o FPS do vídeo
         Returns:
@@ -380,7 +380,7 @@ class TelloZune:
         pres = self.get_state_field('baro')
         time_elapsed = self.get_state_field('time')
         return bat, height, temph, pres, time_elapsed
-    
+
     def write_info(self, frame: np.ndarray, fps: bool = False, bat: bool = False,
                    height: bool = False, temph: bool = False, pres: bool = False,
                    time_elapsed: bool = False) -> None:
@@ -423,5 +423,3 @@ class TelloZune:
         if time_elapsed:
             cv2.putText(frame, f"{self.get_state_field('time')}s",
                         (ORG_INFO[0], ORG_INFO[1] + y_offset), FONT, FONTSCALE_SMALL, COLOR, THICKNESS_SMALL)
-
-
