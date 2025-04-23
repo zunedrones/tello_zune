@@ -216,8 +216,15 @@ class TelloZune:
         self.sock_state.close()
 
     def start_communication(self) -> None:
-        """(Re)inicia threads de comunicação."""
-        for thread in (self.receiverThread, self.eventThread, self.stateThread):
+        """
+        Inicia threads de comunicação e leitura de comandos.
+        """
+        for thread in (
+            self.receiverThread,
+            self.eventThread,
+            self.stateThread,
+            self.movesThread,
+        ):
             if not thread.is_alive():
                 thread.start()
 
@@ -304,15 +311,16 @@ class TelloZune:
 
     def start_tello(self) -> None:
         """
-        Inicializa o drone tello. Conecta, testa se é possível voar, habilita a transmissão por vídeo.
+        Inicializa o vídeo e, se não simulação, decola.
+        Deve ser chamado após criar instância.
         """
-        if not self.receiverThread.is_alive(): # Se a thread de recebimento não estiver ativa
-            self.wait_till_connected()
-            self.start_communication()
-            self.start_video()
-            print("Conectei ao Tello")
-            print("Abrindo vídeo do Tello")
+        self.start_communication()
+        self.sock_cmd.sendto(b'streamon', self.telloaddr)
+        # Inicia thread de vídeo
+        if not self.videoThread.is_alive():
+            self.videoThread.start()
 
+        # Somente decola se simulate=False
         if not self.simulate:
             self.takeoff()
 
@@ -347,13 +355,6 @@ class TelloZune:
             int: 0-100
         """
         return self.get_state_field('bat')
-
-    def start_video(self) -> None:
-        """
-        Inicia a transmissão de vídeo do Tello.
-        """
-        self.send_cmd('streamon')
-        if self.videoThread.is_alive() is False:  self.videoThread.start()
 
     def calc_fps(self) -> int:
         """Calcula o FPS do vídeo

@@ -1,7 +1,7 @@
 import time
 import threading
-from tracking_base import follow, draw
-from qr_processing import process
+from .tracking_base import follow, draw
+from .qr_processing import process
 
 old_move = ''
 pace = ' 50'

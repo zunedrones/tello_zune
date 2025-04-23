@@ -4,19 +4,19 @@ import modules.tello_control as tello_control
 import time
 
 # Inicialização
-cap = cv2.VideoCapture(0) # Captura de vídeo da webcam
-tello = TelloZune() # Cria objeto da classe TelloZune
-tello.simulate = False # False: o drone decola; True: simula o voo
-#tello.start_tello() # Inicia a comunicação com o drone
+#cap = cv2.VideoCapture(0) # Captura de vídeo da webcam
+tello = TelloZune(simulate=True) # Cria objeto da classe TelloZune
+tello.start_tello() # Inicia a comunicação com o drone
 #tello_control.enable_search = True # Ativa a busca
 timer = time.time()
 bat, height, temph, pres, time_elapsed = tello.get_info()
+print(tello.simulate)
 
 try:
     while True:
         # Captura
-        ret, frame = cap.read() # Captura de vídeo da webcam
-        #frame = tello.get_frame()
+        #ret, frame = cap.read() # Captura de vídeo da webcam
+        frame = tello.get_frame()
         frame = cv2.resize(frame, (960, 720))
 
         # Tratamento
@@ -37,6 +37,6 @@ try:
             break
 finally:
     # Finalização
-    cap.release()
-    #tello.end_tello()
+    #cap.release()
+    tello.end_tello()
     cv2.destroyAllWindows()
