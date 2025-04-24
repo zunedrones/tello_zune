@@ -48,6 +48,7 @@ class TelloZune:
     Args:
         simulate (bool, optional): Se True, inicia no modo de simulação. Padrão: True.
     """
+    import socket
     def __init__(
         self,
         simulate: bool = True,
@@ -90,18 +91,17 @@ class TelloZune:
         self.eventlist.append({'cmd': 'command', 'period': 100, 'info': ''})
 
         # Sockets
-        import socket
         self.sock_cmd = self.socket.socket(self.socket.AF_INET, self.socket.SOCK_DGRAM)
         self.sock_cmd.bind(self.localaddr)
         self.sock_state = self.socket.socket(self.socket.AF_INET, self.socket.SOCK_DGRAM)
         self.sock_state.bind(self.stateaddr)
 
         # Threads seguras
-        self.receiverThread = SafeThread(target=self.__receive, name="ReceiverThread")
-        self.eventThread = SafeThread(target=self.__periodic_cmd, name="PeriodicCmdThread")
-        self.videoThread = SafeThread(target=self.__video, name="VideoThread")
-        self.stateThread = SafeThread(target=self.__state_receive, name="StateReceiveThread")
-        self.movesThread = SafeThread(target=self.__read_queue, name="CommandQueueThread")
+        self.receiverThread = SafeThread(target=self.__receive)
+        self.eventThread = SafeThread(target=self.__periodic_cmd)
+        self.videoThread = SafeThread(target=self.__video)
+        self.stateThread = SafeThread(target=self.__state_receive)
+        self.movesThread = SafeThread(target=self.__read_queue)
 
         # Inicialização
         self.simulate = simulate
