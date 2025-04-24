@@ -49,6 +49,7 @@ class TelloZune:
         simulate (bool, optional): Se True, inicia no modo de simulação. Padrão: True.
     """
     import socket
+    import cv2
     def __init__(
         self,
         simulate: bool = True,
@@ -215,6 +216,13 @@ class TelloZune:
         if self.receiverThread.is_alive() is not True: self.receiverThread.start()
         if self.eventThread.is_alive() is not True:  self.eventThread.start()
         if self.stateThread.is_alive() is not True:  self.stateThread.start()
+
+    def start_video(self: object) -> None:
+        """
+        Inicia a transmissão de vídeo do Tello.
+        """
+        self.send_cmd('streamon')
+        if self.videoThread.is_alive() is False:  self.videoThread.start()
 
     def stop_video(self) -> None:
         """Stop video stream"""
