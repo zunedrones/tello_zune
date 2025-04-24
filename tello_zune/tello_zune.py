@@ -29,20 +29,18 @@ class SafeThread(threading.Thread):
     Thread cíclica segura, com evento de parada.
     Target deve ser uma callable sem argumentos.
     """
-    def __init__(self, target: callable, name: str = None):
-        super().__init__(daemon=True, name=name)
+    def __init__(self, target):
+        threading.Thread.__init__(self)
+        self.daemon = True
         self.target = target
-        self.stop_ev = threading.Event() # Evento de parada
+        self.stop_ev = threading.Event()
 
-    def stop(self) -> None:
+    def stop(self):
         self.stop_ev.set()
 
-    def run(self) -> None:
+    def run(self):
         while not self.stop_ev.is_set():
-            try:
-                self.target()
-            except Exception as e:
-                print(f"Error in {self.name}: {e}")
+            self.target()
 
 class TelloZune:
     """
@@ -79,7 +77,7 @@ class TelloZune:
 
         # Fila de frames
         self.q = Queue(maxsize=1)
-        self.frame: np.ndarray | None = None
+        self.frame = None
 
         # Fila de comandos
         self.command_queue: Queue[str] = Queue()
@@ -89,13 +87,13 @@ class TelloZune:
         self.timer_ev = threading.Event()
         self.count = 1
         self.eventlist: list[dict] = []
-        self.eventlist.append({'cmd': 'command', 'period': 100, 'info': '', 'val': ''})
+        self.eventlist.append({'cmd': 'command', 'period': 100, 'info': ''})
 
         # Sockets
         import socket
-        self.sock_cmd = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock_cmd = self.socket.socket(self.socket.AF_INET, self.socket.SOCK_DGRAM)
         self.sock_cmd.bind(self.localaddr)
-        self.sock_state = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock_state = self.socket.socket(self.socket.AF_INET, self.socket.SOCK_DGRAM)
         self.sock_state.bind(self.stateaddr)
 
         # Threads seguras
@@ -107,25 +105,22 @@ class TelloZune:
 
         # Inicialização
         self.simulate = simulate
-        self.receiverThread.start()
-        self.eventThread.start()
-        self.stateThread.start()
-        self.videoThread.start()
         self.movesThread.start()
 
     def __video(self) -> None:
         """Thread de vídeo."""
-        self.video = cv2.VideoCapture(self.video_source)
+        self.video = self.cv2.VideoCapture(self.video_source)
         while True:
-            ret, frame = self.video.read()
-            if not ret:
-                break
-            frame = cv2.resize(frame, self.image_size)
-            self.frame = frame
             try:
-                self.q.put(frame, block=False)
-            except:
-                pass
+                # frame from stream
+                ret, frame = self.video.read()
+                if ret:
+                    frame = self.cv2.resize(frame, self.image_size)
+                    self.frame = frame
+                    if not self.q.full():
+                        self.q.put(frame)
+            except Exception as e:
+                print(f"Error in __video thread: {e}")
 
     def add_periodic_event(self, cmd: str, period: int, info: str = "") -> None:
         """
@@ -135,20 +130,18 @@ class TelloZune:
             period (int): Período em frames
             info (str): Informação adicional
         """
-        self.eventlist.append({'cmd': str(cmd), 'period': int(period), 'info': str(info), 'val': str("")})
-
+        self.eventlist.append({'cmd':str(cmd),'period':int(period),'info':str(info), 'val':str("")})
     def __periodic_cmd(self) -> None:
         """Thread para enviar comandos periódicos."""
         try:
 
             for ev in self.eventlist:
                 period = ev['period']
-
                 if self.count % int(period) == 0:
-                    #is time to run the command
                     cmd = ev['cmd']
                     info = ev['info']
                     ret = self.send_cmd_return(cmd).rstrip()
+
                     ev['val'] = str(ret)
 
             # scheduler base time ~ 100 ms
@@ -164,14 +157,14 @@ class TelloZune:
             data, _ = self.sock_cmd.recvfrom(2048)
             self.udp_cmd_ret = data.decode(encoding="utf-8")
             self.cmd_recv_ev.set()
-        except:
+        except Exception:
             pass
 
     def __state_receive(self) -> None:
         """Recebe strings de estado."""
         data, _ = self.sock_state.recvfrom(512)
         val = data.decode(encoding="utf-8").rstrip()
-        self.state_value = val.replace(';', ':').split(':')
+        self.state_value = val.replace(';',':').split(':')
 
     def __read_queue(self) -> None:
         """Lê comandos da fila e envia ao drone."""
@@ -204,29 +197,24 @@ class TelloZune:
         """
         Retorna próximo frame da fila.
         Returns:
-            np.ndarray: Frame do vídeo
+            np.ndarray: Frame do vídeo (920x720)
         """
         return self.q.get()
 
     def stop_communication(self) -> None:
         """Para threads e fecha sockets."""
-        for thread in (self.receiverThread, self.eventThread, self.videoThread, self.stateThread, self.movesThread):
-            thread.stop()
+        self.receiverThread.stop()
+        self.stateThread.stop()
+        self.eventThread.stop()
         self.sock_cmd.close()
-        self.sock_state.close()
 
     def start_communication(self) -> None:
         """
         Inicia threads de comunicação e leitura de comandos.
         """
-        for thread in (
-            self.receiverThread,
-            self.eventThread,
-            self.stateThread,
-            self.movesThread,
-        ):
-            if not thread.is_alive():
-                thread.start()
+        if self.receiverThread.is_alive() is not True: self.receiverThread.start()
+        if self.eventThread.is_alive() is not True:  self.eventThread.start()
+        if self.stateThread.is_alive() is not True:  self.stateThread.start()
 
     def stop_video(self) -> None:
         """Stop video stream"""
@@ -240,10 +228,12 @@ class TelloZune:
         """
         self.receiverThread.start()
 
-        while self.receiverThread.is_alive():
+        while True:
             try:
                 ret = self.send_cmd_return('command')
-                if self.debug== True: ret = "OK" # debug mode
+
+                if self.debug== True: ret = "OK"
+
             except Exception:
                 exit()
             if str(ret) != 'None':
@@ -258,13 +248,11 @@ class TelloZune:
         Returns:
             str: Resposta do drone. Verifique a documentação do SDK do Tello para os comandos válidos.
         """
-        self.udp_cmd_ret = None # Reseta o retorno do comando
-        cmd = cmd.encode(encoding="utf-8") # Codifica o comando para bytes
-        _ = self.sock_cmd.sendto(cmd, self.telloaddr) # Envia o comando via UDP
-
-        self.cmd_recv_ev.wait(0.3) # Espera pela resposta do drone
-        self.cmd_recv_ev.clear() # Limpa o evento de resposta
-
+        self.udp_cmd_ret = None
+        cmd = cmd.encode(encoding="utf-8")
+        _ = self.sock_cmd.sendto(cmd, self.telloaddr)
+        self.cmd_recv_ev.wait(0.3)
+        self.cmd_recv_ev.clear()
         return self.udp_cmd_ret
 
     def send_cmd(self, cmd: str) -> None:
@@ -314,13 +302,13 @@ class TelloZune:
         Inicializa o vídeo e, se não simulação, decola.
         Deve ser chamado após criar instância.
         """
-        self.start_communication()
-        self.sock_cmd.sendto(b'streamon', self.telloaddr)
-        # Inicia thread de vídeo
-        if not self.videoThread.is_alive():
-            self.videoThread.start()
+        if not self.receiverThread.is_alive(): # Se a thread de recebimento não estiver ativa
+            self.wait_till_connected()
+            self.start_communication()
+            self.start_video()
+            print("Conectei ao Tello")
+            print("Abrindo vídeo do Tello")
 
-        # Somente decola se simulate=False
         if not self.simulate:
             self.takeoff()
 
