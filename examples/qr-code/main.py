@@ -9,7 +9,7 @@ tello = TelloZune(simulate=True) # Cria objeto da classe TelloZune
 tello.start_tello() # Inicia a comunicação com o drone
 #tello_control.enable_search = True # Ativa a busca
 timer = time.time()
-bat, height, temph, pres, time_elapsed = tello.get_info()
+#bat, height, temph, pres, time_elapsed = tello.get_info()
 print(tello.simulate)
 
 try:
@@ -21,13 +21,7 @@ try:
 
         # Tratamento
         frame = tello_control.moves(tello, frame)
-        fps = tello.calc_fps()
         tello.write_info(frame, True, True, True, True, True, True)
-
-        # Atualização
-        if time.time() - timer > 10:
-            timer = time.time()
-            bat, height, temph, pres, time_elapsed = tello.get_info()
 
         # Exibição
         cv2.imshow('QR Code', frame)
