@@ -118,18 +118,16 @@ class TelloZune:
 
     def __video(self) -> None:
         """Thread de vídeo."""
-        self.video = self.cv2.VideoCapture(self.video_source)
-        while True:
-            try:
-                # frame from stream
-                ret, frame = self.video.read()
-                if ret:
-                    frame = self.cv2.resize(frame, self.image_size)
-                    self.frame = frame
-                    if not self.q.full():
-                        self.q.put(frame)
-            except Exception as e:
-                print(f"Error in __video thread: {e}")
+        try:
+            # frame from stream
+            ret, frame = self.video.read()
+            if ret:
+                frame = self.cv2.resize(frame, self.image_size)
+                self.frame = frame
+                if not self.q.full():
+                    self.q.put(frame)
+        except Exception as e:
+            print(f"Error in __video thread: {e}")
 
     def add_periodic_event(self, cmd: str, period: int, info: str = "") -> None:
         """
