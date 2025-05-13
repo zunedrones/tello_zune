@@ -88,7 +88,8 @@ class TelloZune:
         # Eventos e contadores
         self.cmd_recv_ev = threading.Event()
         self.timer_ev = threading.Event()
-        self.count = 1
+        self.cmd_count = 1
+        self.state_count = 1
         self.eventlist: list[dict] = []
         self.eventlist.append({'cmd': 'command', 'period': 100, 'info': 'keep alive'})
         self.state_list = [
@@ -105,21 +106,22 @@ class TelloZune:
         self.sock_state = self.socket.socket(self.socket.AF_INET, self.socket.SOCK_DGRAM)
         self.sock_state.bind(self.stateaddr)
 
-        # Threads seguras
+        # Threads cíclicas seguras
         self.receiverThread = SafeThread(target=self.__receive)
-        self.eventThread = SafeThread(target=self.__periodic_cmd)
+        self.periodicCmdThread = SafeThread(target=self.__periodic_cmd)
         self.videoThread = SafeThread(target=self.__video)
         self.stateThread = SafeThread(target=self.__state_receive)
         self.movesThread = SafeThread(target=self.__read_queue)
+        self.periodicStateThread = SafeThread(target=self.__periodic_state)
 
         # Inicialização
         self.simulate = simulate
         self.movesThread.start()
+        self.periodicStateThread.start()
 
     def __video(self) -> None:
         """Thread de vídeo."""
         try:
-            # frame from stream
             ret, frame = self.video.read()
             if ret:
                 frame = self.cv2.resize(frame, self.image_size)
@@ -127,7 +129,8 @@ class TelloZune:
                 if not self.q.full():
                     self.q.put(frame)
         except Exception as e:
-            print(f"Error in __video thread: {e}")
+            print(f"Erro na thread de vídeo: {e}")
+
 
     def add_periodic_event(self, cmd: str, period: int, info: str = "") -> None:
         """
@@ -138,25 +141,30 @@ class TelloZune:
             info (str): Informação adicional
         """
         self.eventlist.append({'cmd':str(cmd),'period':int(period),'info':str(info), 'val':str("")})
+
     def __periodic_cmd(self) -> None:
         """Thread para enviar comandos periódicos."""
         try:
-
             for ev in self.eventlist:
                 period = ev['period']
-                if self.count % int(period) == 0:
+                if self.cmd_count % int(period) == 0:
                     cmd = ev['cmd']
                     info = ev['info']
                     ret = self.send_cmd_return(cmd).rstrip()
-
                     ev['val'] = str(ret)
-
-            # scheduler base time ~ 100 ms
+            # Tempo de espera entre os comandos (~100ms)
             self.timer_ev.wait(0.1)
-
-            self.count +=1
+            self.cmd_count += 1
         except Exception:
             pass
+
+    def __periodic_state(self) -> None:
+        for ev in self.state_list:
+            if self.state_count % ev['period'] == 0:
+                raw = self.get_state_field(ev['state']) or ''
+                ev['val'] = raw.rstrip()
+        self.timer_ev.wait(0.1)
+        self.state_count += 1
 
     def __receive(self) -> None:
         """Recebe strings de resposta de comando."""
@@ -174,15 +182,25 @@ class TelloZune:
         self.state_value = val.replace(';',':').split(':')
 
     def __read_queue(self) -> None:
-        """Lê comandos da fila e envia ao drone."""
-        while True:
-            try:
-                cmd = self.command_queue.get(timeout=1)
-                resp = self.send_cmd_return(cmd)
-                time.sleep(3)
-                print(f"{cmd}, {resp}")
-            except Empty:
-                continue
+        """Lê comandos da fila, envia ao drone e exibe resposta."""
+        try:
+            # Tenta pegar um comando; se não houver em 1s, dispara Empty
+            cmd = self.command_queue.get(timeout=1)
+        except Empty:
+            return  # Sem comando, volta ao loop
+
+        self.send_cmd(cmd) # Envia o comando
+
+        if self.cmd_recv_ev.wait(timeout=2): # Espera pela resposta
+            resp = self.udp_cmd_ret.rstrip()
+            self.cmd_recv_ev.clear()
+        else:
+            resp = '' # Timeout sem resposta
+
+        print(f"{cmd}\t|{resp}")
+
+        # Pequeno intervalo para não sobrecarregar
+        time.sleep(0.1)
 
     def add_command(self, command: str) -> None:
         """Enfileira um comando."""
@@ -212,31 +230,32 @@ class TelloZune:
         """Para threads e fecha sockets."""
         self.receiverThread.stop()
         self.stateThread.stop()
-        self.eventThread.stop()
+        self.periodicCmdThread.stop()
+        self.movesThread.stop()
         self.sock_cmd.close()
+        self.sock_state.close()
+        self.periodicStateThread.stop()
 
     def start_communication(self) -> None:
         """
         Inicia threads de comunicação e leitura de comandos.
         """
         if self.receiverThread.is_alive() is not True: self.receiverThread.start()
-        if self.eventThread.is_alive() is not True:  self.eventThread.start()
+        if self.periodicCmdThread.is_alive() is not True:  self.periodicCmdThread.start()
         if self.stateThread.is_alive() is not True:  self.stateThread.start()
+        print("Iniciando comunicação")
 
     def start_video(self: object) -> None:
         """
         Inicia a transmissão de vídeo do Tello.
         """
-            # 1) Liga o stream no drone
         self.send_cmd('streamon')
         print("Iniciando vídeo")
 
-        # 2) Pequeno delay para o Tello começar a enviar
         time.sleep(1)
 
         self.video = self.cv2.VideoCapture(self.video_source, self.cv2.CAP_FFMPEG)
 
-        # 4) Inicia a thread que lê quadros
         if not self.videoThread.is_alive():
             self.videoThread.start()
         print("Vídeo iniciado")
@@ -276,7 +295,7 @@ class TelloZune:
         self.udp_cmd_ret = None
         cmd = cmd.encode(encoding="utf-8")
         _ = self.sock_cmd.sendto(cmd, self.telloaddr)
-        self.cmd_recv_ev.wait(0.3)
+        self.cmd_recv_ev.wait(1)
         self.cmd_recv_ev.clear()
         return self.udp_cmd_ret
 
@@ -284,7 +303,7 @@ class TelloZune:
         """
         Envia um comando para o drone Tello via UDP. Não espera pela resposta.
         Args:
-            cmd (str): See Tello SDK for walid commands
+            cmd (str): Consulte a documentação do SDK do Tello para os comandos válidos.
         """
         cmd = cmd.encode(encoding="utf-8")
         _ = self.sock_cmd.sendto(cmd, self.telloaddr)
@@ -328,11 +347,9 @@ class TelloZune:
         Deve ser chamado após criar instância.
         """
         if not self.receiverThread.is_alive(): # Se a thread de recebimento não estiver ativa
-            self.wait_till_connected()
+            self.wait_till_connected() # Comentar para usar webcam
             self.start_communication()
             self.start_video()
-            print("Conectei ao Tello")
-            print("Abrindo vídeo do Tello")
 
         if not self.simulate:
             self.takeoff()
@@ -384,56 +401,70 @@ class TelloZune:
 
     def get_info(self) -> tuple:
         """
-        Retorna informações do drone.
+        Retorna tupla com os valores atualizados em state_list.
         Returns:
-            tuple: (bateria, altura, temperatura máxima, pressão, tempo decorrido)
+            tuple: (bateria, altura, temperatura, pressão, tempo)
         """
-        bat = self.get_state_field('bat')
-        height = self.get_state_field('tof')
-        temph = self.get_state_field('temph')
-        pres = self.get_state_field('baro')
-        time_elapsed = self.get_state_field('time')
-        return bat, height, temph, pres, time_elapsed
+        d = {ev['state']: ev['val'] for ev in self.state_list}
+        return (
+            d.get('bat'),
+            d.get('tof'),
+            d.get('temph'),
+            d.get('baro'),
+            d.get('time'),
+        )
 
-    def write_info(self, frame: np.ndarray, fps: bool = False, bat: bool = False,
-                   height: bool = False, temph: bool = False, pres: bool = False,
-                   time_elapsed: bool = False) -> None:
+    def write_info(self, frame: np.ndarray,
+                fps: bool = False,
+                bat: bool = False,
+                height: bool = False,
+                temph: bool = False,
+                pres: bool = False,
+                time_elapsed: bool = False) -> None:
         """
         Escreve informações no frame atual, posicionadas corretamente.
 
         Args:
             frame (MatLike): Frame do vídeo
-            fps (bool): Escrever FPS (canto superior esquerdo)
-            bat (bool): Escrever bateria (canto inferior direito)
-            height (bool): Escrever altura (canto inferior esquerdo, reduzido)
-            temph (bool): Escrever temperatura máxima (canto inferior esquerdo, reduzido)
-            pres (bool): Escrever pressão (canto inferior esquerdo, reduzido)
-            time_elapsed (bool): Escrever tempo decorrido (canto inferior esquerdo, reduzido)
+            fps (bool): Exibe FPS (canto superior esquerdo)
+            bat (bool): Exibe bateria (canto inferior direito)
+            height (bool): Exibe altura (canto inferior esquerdo, reduzido)
+            temph (bool): Exibe temperatura máxima (canto inferior esquerdo, reduzido)
+            pres (bool): Exibe pressão (canto inferior esquerdo, reduzido)
+            time_elapsed (bool): Exibe tempo decorrido (canto inferior esquerdo, reduzido)
         """
-
+        # FPS
         if fps:
-            cv2.putText(frame, f"FPS: {self.calc_fps()}", ORG_FPS, FONT, FONTSCALE, COLOR, THICKNESS)
+            valor_fps = self.calc_fps()
+            cv2.putText(frame, f"FPS: {valor_fps}",
+                        ORG_FPS, FONT, FONTSCALE, COLOR, THICKNESS)
 
+        # Obtém todos os estados de uma vez
+        bat_val, h_val, temp_val, pres_val, time_val = self.get_info()
+
+        # Bateria
         if bat:
-            cv2.putText(frame, f"Battery: {self.get_battery()}%", ORG_BAT, FONT, FONTSCALE, COLOR, THICKNESS)
+            cv2.putText(frame, f"Battery: {bat_val}%",
+                        ORG_BAT, FONT, FONTSCALE, COLOR, THICKNESS)
 
-        y_offset = 0  # Para organizar as informações na parte inferior esquerda
-
+        # Informações em coluna no canto inferior esquerdo
+        y_off = 0
         if height:
-            cv2.putText(frame, f"{self.get_state_field('tof')}cm",
-                        (ORG_INFO[0], ORG_INFO[1] + y_offset), FONT, FONTSCALE_SMALL, COLOR, THICKNESS_SMALL)
-            y_offset += LINE_SPACING
-
+            cv2.putText(frame, f"{h_val}cm",
+                        (ORG_INFO[0], ORG_INFO[1] + y_off),
+                        FONT, FONTSCALE_SMALL, COLOR, THICKNESS_SMALL)
+            y_off += LINE_SPACING
         if temph:
-            cv2.putText(frame, f"{self.get_state_field('temph')} C",
-                        (ORG_INFO[0], ORG_INFO[1] + y_offset), FONT, FONTSCALE_SMALL, COLOR, THICKNESS_SMALL)
-            y_offset += LINE_SPACING
-
+            cv2.putText(frame, f"{temp_val} C",
+                        (ORG_INFO[0], ORG_INFO[1] + y_off),
+                        FONT, FONTSCALE_SMALL, COLOR, THICKNESS_SMALL)
+            y_off += LINE_SPACING
         if pres:
-            cv2.putText(frame, f"{self.get_state_field('baro')}hPa",
-                        (ORG_INFO[0], ORG_INFO[1] + y_offset), FONT, FONTSCALE_SMALL, COLOR, THICKNESS_SMALL)
-            y_offset += LINE_SPACING
-
+            cv2.putText(frame, f"{pres_val}hPa",
+                        (ORG_INFO[0], ORG_INFO[1] + y_off),
+                        FONT, FONTSCALE_SMALL, COLOR, THICKNESS_SMALL)
+            y_off += LINE_SPACING
         if time_elapsed:
-            cv2.putText(frame, f"{self.get_state_field('time')}s",
-                        (ORG_INFO[0], ORG_INFO[1] + y_offset), FONT, FONTSCALE_SMALL, COLOR, THICKNESS_SMALL)
+            cv2.putText(frame, f"{time_val}s",
+                        (ORG_INFO[0], ORG_INFO[1] + y_off),
+                        FONT, FONTSCALE_SMALL, COLOR, THICKNESS_SMALL)
