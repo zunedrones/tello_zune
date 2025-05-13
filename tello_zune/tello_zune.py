@@ -108,7 +108,7 @@ class TelloZune:
 
         # Threads cíclicas seguras
         self.receiverThread = SafeThread(target=self.__receive)
-        self.eventThread = SafeThread(target=self.__periodic_cmd)
+        self.periodicCmdThread = SafeThread(target=self.__periodic_cmd)
         self.videoThread = SafeThread(target=self.__video)
         self.stateThread = SafeThread(target=self.__state_receive)
         self.movesThread = SafeThread(target=self.__read_queue)
@@ -230,16 +230,18 @@ class TelloZune:
         """Para threads e fecha sockets."""
         self.receiverThread.stop()
         self.stateThread.stop()
-        self.eventThread.stop()
+        self.periodicCmdThread.stop()
         self.movesThread.stop()
         self.sock_cmd.close()
+        self.sock_state.close()
+        self.periodicStateThread.stop()
 
     def start_communication(self) -> None:
         """
         Inicia threads de comunicação e leitura de comandos.
         """
         if self.receiverThread.is_alive() is not True: self.receiverThread.start()
-        if self.eventThread.is_alive() is not True:  self.eventThread.start()
+        if self.periodicCmdThread.is_alive() is not True:  self.periodicCmdThread.start()
         if self.stateThread.is_alive() is not True:  self.stateThread.start()
         print("Iniciando comunicação")
 
