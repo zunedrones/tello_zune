@@ -92,7 +92,7 @@ class TelloZune:
         self.state_count = 1
         self.eventlist: list[dict] = []
         self.eventlist.append({'cmd': 'command', 'period': 200, 'info': 'keep alive'})
-        self.stateList = [
+        self.state_list = [
             {'state': 'bat',    'period': 100, 'info': 'Porcentagem de bateria', 'val': ''},
             {'state': 'tof',    'period': 25,  'info': 'Altura em cm',           'val': ''},
             {'state': 'temph',  'period': 100, 'info': 'Temperatura máxima',     'val': ''},
@@ -159,7 +159,7 @@ class TelloZune:
             pass
 
     def __periodic_state(self) -> None:
-        for ev in self.stateList:
+        for ev in self.state_list:
             if self.state_count % ev['period'] == 0:
                 raw = self.get_state_field(ev['state']) or ''
                 ev['val'] = raw.rstrip()
@@ -395,11 +395,11 @@ class TelloZune:
 
     def get_info(self) -> tuple:
         """
-        Retorna tupla com os valores atualizados em stateList.
+        Retorna tupla com os valores atualizados em state_list.
         Returns:
             tuple: (bateria, altura, temperatura, pressão, tempo)
         """
-        d = {ev['state']: ev['val'] for ev in self.stateList}
+        d = {ev['state']: ev['val'] for ev in self.state_list}
         return (
             d.get('bat'),
             d.get('tof'),
