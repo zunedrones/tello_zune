@@ -88,7 +88,8 @@ class TelloZune:
         # Eventos e contadores
         self.cmd_recv_ev = threading.Event()
         self.timer_ev = threading.Event()
-        self.count = 1
+        self.cmd_count = 1
+        self.state_count = 1
         self.eventlist: list[dict] = []
         self.eventlist.append({'cmd': 'command', 'period': 200, 'info': 'keep alive'})
         self.stateList = [
@@ -146,24 +147,24 @@ class TelloZune:
         try:
             for ev in self.eventlist:
                 period = ev['period']
-                if self.count % int(period) == 0:
+                if self.cmd_count % int(period) == 0:
                     cmd = ev['cmd']
                     info = ev['info']
                     ret = self.send_cmd_return(cmd).rstrip()
                     ev['val'] = str(ret)
             # Tempo de espera entre os comandos (~100ms)
             self.timer_ev.wait(0.1)
-            self.count +=1
+            self.cmd_count += 1
         except Exception:
             pass
 
     def __periodic_state(self) -> None:
         for ev in self.stateList:
-            if self.count % ev['period'] == 0:
+            if self.state_count % ev['period'] == 0:
                 raw = self.get_state_field(ev['state']) or ''
                 ev['val'] = raw.rstrip()
         self.timer_ev.wait(0.1)
-        self.count += 1
+        self.state_count += 1
 
     def __receive(self) -> None:
         """Recebe strings de resposta de comando."""
@@ -223,7 +224,6 @@ class TelloZune:
         Returns:
             np.ndarray: Frame do vídeo (920x720)
         """
-        print("get_frame")
         return self.q.get()
 
     def stop_communication(self) -> None:
