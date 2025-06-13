@@ -4,6 +4,7 @@ from .tracking_base import follow, draw
 from .qr_processing import process
 
 old_move = ''
+following_qr = False
 pace = ' 50'
 VALID_COMMANDS = [
     'takeoff', 'land', 'up', 'down', 'left', 'right', 'forward', 'back', 'cw', 'ccw'
@@ -15,25 +16,16 @@ response = ''
 log_messages = []
 last_command_time = {} # Dicionário para armazenar o tempo do último envio de cada comando
 
-def search(tello: object):
-    """
-    Procura por QR codes rotacionando o drone Tello em 20 graus para a direita e 40 graus para a esquerda.
-    Args:
-        tello: Objeto da classe TelloZune, que possui métodos para enviar comandos e obter estado.
-    """
-    timer = time.time()
-    i = 0
-    commands = ['ccw 20', 'cw 50']
-    while not stop_searching.is_set() and not tello.stop_receiving.is_set() and enable_search:
-        if time.time() - timer >= 10:                # 10 segundos
-            tello.add_command(commands[i])          # Rotaciona
-            time.sleep(0.1)                          # Testar se resposta é exibida
-            print(f"{commands[i]}, {response}")
-            log_messages.append(f"{commands[i]}, {response}\n")
-            timer = time.time()
-            i = (i + 1) % 2                          # Alterna entre 0 e 1
-            time.sleep(0.01)
-        #print((time.time() - timer).__round__(2)) # Ver contagem regressiva
+def process_ai_command(tello: object, command: str):
+     """
+     Processa comandos da IA
+     Args:
+         tello (object): Objeto da classe TelloZune, que possui métodos para enviar comandos e obter estado.
+         command (str): Comando a ser processado.
+     """
+     base_cmd = command.split()[0] if ' ' in command else command # Caso tenha espaço, pega apenas o comando
+     if base_cmd in VALID_COMMANDS:
+        tello.add_command(command)
 
 def moves(tello: object, frame: object) -> object:
     """
@@ -44,25 +36,19 @@ def moves(tello: object, frame: object) -> object:
     Returns:
         object: Frame atualizado.
     """
-    global old_move, pace, searching, stop_searching
-
+    global old_move, pace, searching, stop_searching, following_qr
+    
     frame, x1, y1, x2, y2, detections, text = process(frame)
+    
+    if following_qr and (detections != 1 or text != 'follow'):
+        # Para o drone se perder o QR code de follow
+        tello.send_rc_control(0, 0, 0, 0)
+        following_qr = False
 
-    if detections == 0 and old_move != 'land' and enable_search:
-        if not searching:
-            stop_searching.clear()
-            search_thread = threading.Thread(target=search, args=(tello,))
-            search_thread.daemon = True
-            search_thread.start()
-            searching = True
-
-    elif detections == 1:
-        if searching:
-            stop_searching.set()
-            searching = False
-
+    if detections == 1:
         if text == 'follow':
             frame = follow(tello, frame, x1, y1, x2, y2, detections, text)
+            following_qr = True  # Ativa estado de seguimento
 
         else:
             frame = draw(frame, x1, y1, x2, y2, text)

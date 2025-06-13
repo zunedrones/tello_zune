@@ -58,6 +58,7 @@ class TelloZune:
         VIDEO_SOURCE: str = "udp://@0.0.0.0:11111",
         UDPSTATEPORT: int = 8890,
         DEBUG: bool = False,
+        text_input: bool = False
     ) -> None:
         # Endereços UDP
         self.localaddr = ('', UDPPORT)
@@ -113,11 +114,13 @@ class TelloZune:
         self.stateThread = SafeThread(target=self.__state_receive)
         self.movesThread = SafeThread(target=self.__read_queue)
         self.periodicStateThread = SafeThread(target=self.__periodic_state)
+        self.textInputThread = SafeThread(target=self.__text_input)
 
         # Inicialização
         self.simulate = simulate
         self.movesThread.start()
         self.periodicStateThread.start()
+        self.enable_text_input = text_input
 
     def __video(self) -> None:
         """Thread de vídeo."""
@@ -140,7 +143,7 @@ class TelloZune:
             period (int): Período em frames
             info (str): Informação adicional
         """
-        self.eventlist.append({'cmd':str(cmd),'period':int(period),'info':str(info), 'val':str("")})
+        self.eventlist.append({'cmd':str(cmd), 'period':int(period), 'info':str(info), 'val':str("")})
 
     def __periodic_cmd(self) -> None:
         """Thread para enviar comandos periódicos."""
@@ -202,11 +205,23 @@ class TelloZune:
         # Pequeno intervalo para não sobrecarregar
         time.sleep(0.1)
 
+    def __text_input(self) -> None:
+        """Thread para entrada de texto."""
+        try:
+            cmd = input("Comando digitado: ")
+            if cmd.lower() == 'exit':
+                self.textInputThread.stop()
+            self.add_command(cmd)
+        except KeyboardInterrupt:
+            self.textInputThread.stop()
+        except Exception as e:
+            print(f"Erro na entrada de texto: {e}")
+
     def add_command(self, command: str) -> None:
         """Enfileira um comando."""
         try:
             self.command_queue.put(command)
-            print(f"Comando enfileirado: {command}")
+            print(f"Comando enfileirado: {command}\n")
         except Exception as e:
             print(f"Erro ao adicionar comando: {e}")
 
@@ -235,6 +250,8 @@ class TelloZune:
         self.sock_cmd.close()
         self.sock_state.close()
         self.periodicStateThread.stop()
+        if self.textInputThread.is_alive():
+            self.textInputThread.stop()
 
     def start_communication(self) -> None:
         """
@@ -259,6 +276,11 @@ class TelloZune:
         if not self.videoThread.is_alive():
             self.videoThread.start()
         print("Vídeo iniciado")
+
+        if self.enable_text_input:
+            if not self.textInputThread.is_alive():
+                self.textInputThread.start()
+            print("Entrada de texto habilitada")
 
     def stop_video(self) -> None:
         """Stop video stream"""
@@ -380,14 +402,16 @@ class TelloZune:
             return state[index]
 
     def get_battery(self) -> int:
-        """Retorna o nível da bateria do drone.
+        """
+        Retorna o nível da bateria do drone.
         Returns:
             int: 0-100
         """
         return self.get_state_field('bat')
 
     def calc_fps(self) -> int:
-        """Calcula o FPS do vídeo
+        """
+        Calcula o FPS do vídeo
         Returns:
             int: FPS
         """
