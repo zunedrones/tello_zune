@@ -69,6 +69,7 @@ class TelloZune:
         # Estado interno
         self.debug = DEBUG
         self.fps = 0
+        self.ready = False
         self.state_value: list[str] = []
         self.image_size: tuple[int, int] = (WIDTH, HEIGHT)
         self.start_time = time.time()
@@ -125,12 +126,15 @@ class TelloZune:
     def __video(self) -> None:
         """Thread de vídeo."""
         try:
-            ret, frame = self.video.read()
-            if ret:
-                frame = self.cv2.resize(frame, self.image_size)
-                self.frame = frame
-                if not self.q.full():
-                    self.q.put(frame)
+            if self.video is not None:
+                ret, frame = self.video.read()
+                if ret:
+                    frame = self.cv2.resize(frame, self.image_size)
+                    self.frame = frame
+                    if not self.q.full():
+                        self.q.put(frame)
+            else:
+                print("Erro: self.video é None, não é possível ler o frame.")
         except Exception as e:
             print(f"Erro na thread de vídeo: {e}")
 
@@ -194,7 +198,7 @@ class TelloZune:
 
         self.send_cmd(cmd) # Envia o comando
 
-        if self.cmd_recv_ev.wait(timeout=2): # Espera pela resposta
+        if self.cmd_recv_ev.wait(timeout=2) and self.udp_cmd_ret: # Espera pela resposta
             resp = self.udp_cmd_ret.rstrip()
             self.cmd_recv_ev.clear()
         else:
@@ -252,6 +256,7 @@ class TelloZune:
         self.periodicStateThread.stop()
         if self.textInputThread.is_alive():
             self.textInputThread.stop()
+        print("Comunicação finalizada")
 
     def start_communication(self) -> None:
         """
@@ -262,12 +267,11 @@ class TelloZune:
         if self.stateThread.is_alive() is not True:  self.stateThread.start()
         print("Iniciando comunicação")
 
-    def start_video(self: object) -> None:
+    def start_video(self: "TelloZune") -> None:
         """
         Inicia a transmissão de vídeo do Tello.
         """
         self.send_cmd('streamon')
-        print("Iniciando vídeo")
 
         time.sleep(1)
 
@@ -277,33 +281,39 @@ class TelloZune:
             self.videoThread.start()
         print("Vídeo iniciado")
 
-        if self.enable_text_input:
-            if not self.textInputThread.is_alive():
-                self.textInputThread.start()
-            print("Entrada de texto habilitada")
-
     def stop_video(self) -> None:
         """Stop video stream"""
         self.send_cmd('streamoff')
         self.videoThread.stop()
 
-    def wait_till_connected(self) -> None:
+    def wait_till_connected(self, timeout: int = 10) -> None:
         """
         Bloqueia a execução até que o drone Tello esteja conectado.
         Use este método no início do seu código para garantir que o drone esteja pronto para receber comandos.
         """
         self.receiverThread.start()
+        start_counter = time.time()
 
+        ret = None
+        wait_time = 0
         while True:
             try:
                 ret = self.send_cmd_return('command')
 
+                wait_time = time.time() - start_counter
+
                 if self.debug== True: ret = "OK"
 
-            except Exception:
-                exit()
-            if str(ret) != 'None':
+            except Exception as e:
+                print(f"Erro ao enviar comando: {e}")
+
+            if str(ret) == 'ok':
+                print(f"Drone conectado em {wait_time:.2f} segundos.")
                 break
+            if time.time() - start_counter > timeout:
+                print("Tempo limite de conexão excedido. Verifique o drone e a rede.")
+                break
+            time.sleep(0.1)
 
     def send_cmd_return(self, cmd: str) -> str:
         """
@@ -314,9 +324,9 @@ class TelloZune:
         Returns:
             str: Resposta do drone. Verifique a documentação do SDK do Tello para os comandos válidos.
         """
-        self.udp_cmd_ret = None
-        cmd = cmd.encode(encoding="utf-8")
-        _ = self.sock_cmd.sendto(cmd, self.telloaddr)
+        self.udp_cmd_ret = str()
+        cmd_bytes = cmd.encode(encoding="utf-8")
+        _ = self.sock_cmd.sendto(cmd_bytes, self.telloaddr)
         self.cmd_recv_ev.wait(1)
         self.cmd_recv_ev.clear()
         return self.udp_cmd_ret
@@ -327,8 +337,8 @@ class TelloZune:
         Args:
             cmd (str): Consulte a documentação do SDK do Tello para os comandos válidos.
         """
-        cmd = cmd.encode(encoding="utf-8")
-        _ = self.sock_cmd.sendto(cmd, self.telloaddr)
+        cmd_bytes = cmd.encode(encoding="utf-8")
+        _ = self.sock_cmd.sendto(cmd_bytes, self.telloaddr)
 
     def send_rc_control(self, left_right_velocity: int, forward_backward_velocity: int, up_down_velocity: int,
                         yaw_velocity: int) -> None:
@@ -353,14 +363,16 @@ class TelloZune:
 
     def takeoff(self) -> None:
         """Decola o drone Tello."""
-        self.send_cmd("takeoff")
+        print("Decolando")
+        self.add_command("takeoff")
         time.sleep(4)
     
     def land(self) -> None:
         """Pousa o drone Tello."""
+        print("Pousando")
         while float(self.get_state_field('tof')) >= 30:
             self.send_rc_control(0, 0, -70, 0)
-        self.send_cmd("land")
+        self.add_command("land")
         #time.sleep(4)
 
     def start_tello(self) -> None:
@@ -376,16 +388,19 @@ class TelloZune:
         if not self.simulate:
             self.takeoff()
 
+        if self.enable_text_input:
+            if not self.textInputThread.is_alive():
+                self.textInputThread.start()
+            print("Entrada de texto habilitada")
+
     def end_tello(self) -> None:
         """
         Finaliza o drone Tello. Pousa se possivel, encerra o video e a comunicacao.
         """
         self.stop_video()
         if not self.simulate:
-            print("Pousando")
             self.land()
         self.stop_communication()
-        print("Finalizei")
 
     def get_state_field(self, key: str) -> str:
         """
@@ -400,6 +415,7 @@ class TelloZune:
         if key in state:
             index = state.index(key) + 1
             return state[index]
+        return ""
 
     def get_battery(self) -> int:
         """
@@ -407,7 +423,7 @@ class TelloZune:
         Returns:
             int: 0-100
         """
-        return self.get_state_field('bat')
+        return int(self.get_state_field('bat'))
 
     def calc_fps(self) -> int:
         """
