@@ -25,7 +25,7 @@ def process_ai_command(tello: object, command: str):
      """
      base_cmd = command.split()[0] if ' ' in command else command # Caso tenha espaço, pega apenas o comando
      if base_cmd in VALID_COMMANDS:
-        tello.add_command(command)
+        tello.add_command(command) # type: ignore
 
 def moves(tello: object, frame: object) -> object:
     """
@@ -42,7 +42,7 @@ def moves(tello: object, frame: object) -> object:
     
     if following_qr and (detections != 1 or text != 'follow'):
         # Para o drone se perder o QR code de follow
-        tello.send_rc_control(0, 0, 0, 0)
+        tello.send_rc_control(0, 0, 0, 0) # type: ignore
         following_qr = False
 
     if detections == 1:
@@ -54,14 +54,14 @@ def moves(tello: object, frame: object) -> object:
             frame = draw(frame, x1, y1, x2, y2, text)
 
             if text in ['land', 'takeoff'] and old_move != text:
-                tello.add_command(text)
+                tello.add_command(text) # type: ignore
                 log_messages.append(text)
 
             current_time = time.time()
             if text in VALID_COMMANDS[2:]:
                 last = last_command_time.get(text, 0)
                 if old_move != text or (current_time - last > 10):
-                    tello.add_command(f"{text}{pace}")
+                    tello.add_command(f"{text}{pace}") # type: ignore
                     log_messages.append(f"{text}{pace}")
                     last_command_time[text] = current_time
 

@@ -1,10 +1,9 @@
-import os
 import cv2
 from pyzbar.pyzbar import decode
 from tello_zune import TelloZune
+from ui.display_utils import write_info
 
 #cap = cv2.VideoCapture(0)
-os.environ['QT_QPA_PLATFORM'] = 'xcb' # Para rodar o cv2 no WSL2
 data = []
 
 tello = TelloZune()
@@ -27,11 +26,18 @@ def process(frame):
     #print(data)
     return frame
 
-#cv2.namedWindow('QR Code', cv2.WINDOW_AUTOSIZE)
+stats = {
+    "fps": True,
+    "battery": True,
+    "height": True,
+    "temperature": True,
+    "pressure": True,
+    "time_elapsed": True
+}
 while True:
     #ret, frame = cap.read()
     ret, frame = tello.get_frame()
-    tello.calc_fps(frame)
+    write_info(frame, tello, stats)
     if not ret:
         print('erro na captura do frame')
         break
