@@ -1,13 +1,22 @@
 import cv2
 from tello_zune import TelloZune
+from ui.display_utils import write_info
 
 tello = TelloZune(simulate=False)
 tello.start_tello()
 
+stats = {
+    "fps": True,
+    "battery": True,
+    "height": True,
+    "temperature": True,
+    "pressure": True,
+    "time_elapsed": True
+}
 while True:
     img = tello.get_frame()
 
-    tello.write_info(img, fps=True, bat=True, height=True, temph=True, pres=True, time_elapsed=True)
+    write_info(img, tello, stats)
 
     cv2.imshow('Tello', img)
 

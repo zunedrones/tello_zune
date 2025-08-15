@@ -1,28 +1,14 @@
 """
 Biblioteca tello_zune, serve para controlar, e obter informacoes do drone DJI Tello.
+Esta biblioteca é baseada no SDK do Tello, e implementa uma interface de alto nível para controle do drone.
 """
 import time
 import threading
-import cv2
 import numpy as np
 from queue import Queue, Empty
 
-FONT = cv2.FONT_HERSHEY_SIMPLEX
-COLOR = (0, 255, 0)
-
 WIDTH = 960
 HEIGHT = 720
-
-ORG = (30, 30)
-ORG_FPS = (10, 30)  # Canto superior esquerdo
-ORG_BAT = (WIDTH - 200, HEIGHT - 10)  # Canto inferior direito
-ORG_INFO = (10, HEIGHT - 90)  # Canto inferior esquerdo
-
-FONTSCALE = 1
-FONTSCALE_SMALL = 0.6
-THICKNESS = 2
-THICKNESS_SMALL = 1
-LINE_SPACING = 20 # Espaço entre linhas, para exibição de dados
 
 class SafeThread(threading.Thread):
     """
@@ -47,6 +33,7 @@ class TelloZune:
     Classe para controlar o drone DJI Tello.
     Args:
         simulate (bool, optional): Se True, inicia no modo de simulação. Padrão: True.
+        text_input (bool, optional): Se True, aceita comandos de texto via terminal. Padrão: False.
     """
     import socket
     import cv2
@@ -365,7 +352,7 @@ class TelloZune:
         """Decola o drone Tello."""
         print("Decolando")
         self.add_command("takeoff")
-        time.sleep(4)
+        # time.sleep(4)
     
     def land(self) -> None:
         """Pousa o drone Tello."""
@@ -453,58 +440,3 @@ class TelloZune:
             d.get('baro'),
             d.get('time'),
         )
-
-    def write_info(self, frame: np.ndarray,
-                fps: bool = False,
-                bat: bool = False,
-                height: bool = False,
-                temph: bool = False,
-                pres: bool = False,
-                time_elapsed: bool = False) -> None:
-        """
-        Escreve informações no frame atual, posicionadas corretamente.
-
-        Args:
-            frame (MatLike): Frame do vídeo
-            fps (bool): Exibe FPS (canto superior esquerdo)
-            bat (bool): Exibe bateria (canto inferior direito)
-            height (bool): Exibe altura (canto inferior esquerdo, reduzido)
-            temph (bool): Exibe temperatura máxima (canto inferior esquerdo, reduzido)
-            pres (bool): Exibe pressão (canto inferior esquerdo, reduzido)
-            time_elapsed (bool): Exibe tempo decorrido (canto inferior esquerdo, reduzido)
-        """
-        # FPS
-        if fps:
-            valor_fps = self.calc_fps()
-            cv2.putText(frame, f"FPS: {valor_fps}",
-                        ORG_FPS, FONT, FONTSCALE, COLOR, THICKNESS)
-
-        # Obtém todos os estados de uma vez
-        bat_val, h_val, temp_val, pres_val, time_val = self.get_info()
-
-        # Bateria
-        if bat:
-            cv2.putText(frame, f"Battery: {bat_val}%",
-                        ORG_BAT, FONT, FONTSCALE, COLOR, THICKNESS)
-
-        # Informações em coluna no canto inferior esquerdo
-        y_off = 0
-        if height:
-            cv2.putText(frame, f"{h_val}cm",
-                        (ORG_INFO[0], ORG_INFO[1] + y_off),
-                        FONT, FONTSCALE_SMALL, COLOR, THICKNESS_SMALL)
-            y_off += LINE_SPACING
-        if temph:
-            cv2.putText(frame, f"{temp_val} C",
-                        (ORG_INFO[0], ORG_INFO[1] + y_off),
-                        FONT, FONTSCALE_SMALL, COLOR, THICKNESS_SMALL)
-            y_off += LINE_SPACING
-        if pres:
-            cv2.putText(frame, f"{pres_val}hPa",
-                        (ORG_INFO[0], ORG_INFO[1] + y_off),
-                        FONT, FONTSCALE_SMALL, COLOR, THICKNESS_SMALL)
-            y_off += LINE_SPACING
-        if time_elapsed:
-            cv2.putText(frame, f"{time_val}s",
-                        (ORG_INFO[0], ORG_INFO[1] + y_off),
-                        FONT, FONTSCALE_SMALL, COLOR, THICKNESS_SMALL)
