@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="tello_zune",
-    version="0.7.3",
+    version="0.7.4",
     author="Zune Drones",
     author_email="zunedrones@gmail.com",
     description="Biblioteca tello-zune, serve para controlar, e obter informacoes do drone DJI Tello.",

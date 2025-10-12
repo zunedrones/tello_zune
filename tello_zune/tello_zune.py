@@ -46,6 +46,7 @@ class TelloZune:
         # Estado interno
         self.fps = 0
         self.ready = False
+        self.is_route_active = False
         self.state_value: list[str] = []
         self.image_size: tuple[int, int] = (960, 720)
         self.start_time = time.time()
@@ -69,13 +70,13 @@ class TelloZune:
         self.cmd_count = 1
         self.state_count = 1
         self.event_list: list[dict] = []
-        self.event_list.append({'cmd': 'command', 'period': 100, 'info': 'keep alive'})
+        self.event_list.append({'commands': ['command'], 'period': 150, 'interval': 0, 'info': 'keep alive'})
         self.state_list = [
-            {'state': 'bat',    'period': 100, 'info': 'Porcentagem de bateria', 'val': ''},
-            {'state': 'tof',    'period': 25,  'info': 'Altura em cm',           'val': ''},
-            {'state': 'temph',  'period': 100, 'info': 'Temperatura máxima',     'val': ''},
-            {'state': 'baro',   'period': 500, 'info': 'Pressão',                'val': '65'},
-            {'state': 'time',   'period': 25,  'info': 'Tempo de vôo',           'val': ''},
+            {'state': 'bat',    'period': 200, 'info': 'Porcentagem de bateria', 'val': '80'},
+            {'state': 'tof',    'period': 25,  'info': 'Altura em cm',           'val': '10'},
+            {'state': 'temph',  'period': 200, 'info': 'Temperatura máxima',     'val': '60'},
+            {'state': 'baro',   'period': 600, 'info': 'Pressão',                'val': '65'},
+            {'state': 'time',   'period': 50,  'info': 'Tempo de vôo',           'val': '10'},
         ]
 
         # Sockets
@@ -85,18 +86,41 @@ class TelloZune:
         self.sock_state.bind(self.stateaddr)
 
         # Threads cíclicas seguras
-        self.receiverThread = SafeThread(target=self._response_cmd_receive)
-        self.periodicCmdThread = SafeThread(target=self._periodic_cmd)
-        self.videoThread = SafeThread(target=self._video)
-        self.stateThread = SafeThread(target=self._state_receive)
-        self.movesThread = SafeThread(target=self._read_queue)
-        self.periodicStateThread = SafeThread(target=self._periodic_state)
-        self.textInputThread = SafeThread(target=self._text_input)
+        self.receiverThread = SafeThread(target=self._response_cmd_receive) # Thread de resposta de comando
+        self.periodicCmdThread = SafeThread(target=self._periodic_cmd) # Thread de comandos periódicos
+        self.videoThread = SafeThread(target=self._video) # Thread de vídeo
+        self.stateThread = SafeThread(target=self._state_receive) # Thread de estado
+        self.movesThread = SafeThread(target=self._read_queue) # Thread de movimentos
+        self.periodicStateThread = SafeThread(target=self._periodic_state) # Thread de estado periódico
+        self.textInputThread = SafeThread(target=self._text_input) # Thread de entrada de texto pelo terminal
 
         # Inicialização
-        self.movesThread.start()
-        self.periodicStateThread.start()
         self.enable_text_input = text_input
+
+    def _execute_route(self, commands: list, interval: int) -> None:
+        """
+        Executa uma sequência de comandos (rota) em sua própria thread.
+        Args:
+            commands (list): A lista de comandos a serem executados.
+            interval (int): O tempo de espera em segundos entre cada comando.
+        """
+        self.is_route_active = True
+        try:
+            for i, cmd in enumerate(commands):
+                print(f"Executando passo {i + 1}/{len(commands)} da rota: '{cmd}'")
+                self.add_command(cmd)
+
+                # Espera o intervalo definido antes do próximo comando
+                # Não executa a espera após o último comando
+                if i < len(commands) - 1:
+                    print(f"Aguardando {interval} segundos...")
+                    time.sleep(interval)
+        except Exception as e:
+            print(f"Erro ao executar a rota: {e}")
+        finally:
+            # Garante que a flag seja liberada, mesmo que ocorra um erro
+            print("Rota finalizada.")
+            self.is_route_active = False
 
     def _video(self) -> None:
         """Thread de vídeo."""
@@ -113,8 +137,160 @@ class TelloZune:
         except Exception as e:
             print(f"Erro na thread de vídeo: {e}")
 
+    def _periodic_cmd(self) -> None:
+        """
+        Thread que verifica e dispara eventos periódicos.
+        Ignora o 'keep alive' se outra atividade estiver próxima.
+        """
+        try:
+            cycles_to_next_activity = float('inf') # Ciclos até a próxima atividade programada
+            KEEPALIVE_CMD = 'command'
+            KEEPALIVE_THRESHOLD_CYCLES = 150 # Limite de 15 segundos = 150 ciclos de 0.1s
 
-    def add_periodic_event(self, cmd: str, period: int, info: str = "") -> None:
+            for ev in self.event_list: # Calcula o tempo até a próxima atividade programada
+                if 'commands' in ev and ev['commands'] == [KEEPALIVE_CMD]: # Ignora o próprio evento 'keep alive' nesta verificação
+                    continue
+
+                if 'period' in ev:
+                    period = int(ev['period'])
+                    # Calcula quantos ciclos faltam para a próxima execução deste evento
+                    cycles_left = period - (self.cmd_count % period)
+                    if cycles_left < cycles_to_next_activity:
+                        cycles_to_next_activity = cycles_left
+
+            for ev in self.event_list: # Verifica cada evento na lista
+                if 'period' not in ev or 'commands' not in ev:
+                    continue
+                period = int(ev['period'])
+
+                if self.cmd_count % period == 0: # Verifica se é a hora de executar este evento
+                    is_keep_alive_event = (ev['commands'] == [KEEPALIVE_CMD])
+                    # Lógica para ignorar o 'keep alive' se outra atividade estiver próxima
+                    if is_keep_alive_event and cycles_to_next_activity <= KEEPALIVE_THRESHOLD_CYCLES:
+                        continue # Pula a execução deste evento
+
+                    # Execução normal
+                    # Trata como rota se tiver mais de um comando e nenhuma rota estiver ativa
+                    if len(ev['commands']) > 1 and not self.is_route_active:
+                        print(f"Disparando rota periódica: {ev.get('info', 'N/A')}")
+                        threading.Thread(
+                            target=self._execute_route,
+                            args=(ev['commands'], ev.get('interval')),
+                            daemon=True
+                        ).start()
+                    
+                    # Trata como comando simples se tiver exatamente um comando
+                    elif len(ev['commands']) == 1:
+                        cmd = ev['commands'][0]
+                        print(f"Enviando comando periódico simples: '{cmd}'")
+                        self.add_command(cmd)
+
+            self.timer_ev.wait(0.1)
+            self.cmd_count += 1
+
+        except Exception as e:
+            print(f"Erro na thread de comandos periódicos: {e}")
+            time.sleep(1)
+
+    def _periodic_state(self) -> None:
+        """Atualiza valores em state_list periodicamente."""
+        try:
+            for ev in self.state_list:
+                if self.state_count % ev['period'] == 0:
+                    raw = self.get_state_field(ev['state']) or ''
+                    ev['val'] = raw.rstrip()
+            self.timer_ev.wait(0.1)
+            self.state_count += 1
+        except Exception as e:
+            print(f"Erro na thread de atualização de estado: {e}")
+
+    def _response_cmd_receive(self) -> None:
+        """Recebe strings de resposta de comando via socket UDP."""
+        try:
+            data, _ = self.sock_cmd.recvfrom(2048)
+            self.udp_cmd_ret = data.decode("utf-8")
+            self.cmd_recv_ev.set()
+        except Exception as e:
+            print(f"Erro na thread de recebimento de comando: {e}")
+
+    def _state_receive(self) -> None:
+        """Recebe strings de estado via socket UDP."""
+        try:
+            data, _ = self.sock_state.recvfrom(512)
+            val = data.decode("utf-8").rstrip()
+            self.state_value = val.replace(';', ':').split(':')
+        except Exception as e:
+            print(f"Erro na thread de estado: {e}")
+
+    def _read_queue(self) -> None:
+        """Lê comandos da fila, envia ao drone e exibe resposta."""
+        try:
+            cmd = self.command_queue.get(timeout=1) # Tenta pegar um comando; se não houver em 1s, dispara Empty
+        except Empty:
+            return # Sem comando, volta ao loop
+        self.send_cmd(cmd) # Envia o comando
+        if self.cmd_recv_ev.wait(timeout=2) and self.udp_cmd_ret: # Espera pela resposta
+            resp = self.udp_cmd_ret.rstrip()
+            self.cmd_recv_ev.clear()
+        else:
+            resp = '' # Timeout sem resposta
+        print(f"{cmd}\t{resp}")     
+        time.sleep(0.1) # Pequeno intervalo para não sobrecarregar
+
+    def _text_input(self) -> None:
+        """Thread que lê comandos de texto do terminal."""
+        try:
+            cmd = input("Comando > ")
+            if cmd.lower() == 'exit':
+                print("Sinal de parada recebido. Encerrando entrada de texto...")
+                self.textInputThread.stop() # Sinaliza para a thread parar
+                return
+            self._process_text_command(cmd) # Para qualquer outro comando, chama o processador
+        except (KeyboardInterrupt, EOFError):
+            print("\nEncerrando entrada de texto...")
+            self.textInputThread.stop()
+        except Exception as e:
+            print(f"Erro inesperado na entrada de texto: {e}")
+
+    def _process_text_command(self, cmd: str) -> None:
+        """
+        Processa um comando de texto, o divide e chama o método apropriado.
+        Args:
+            cmd (str): Comando de texto a ser processado
+        """
+        if not cmd:
+            return
+        parts = cmd.strip().lower().split()
+        base_cmd = parts[0]
+        # Comandos simples, sem argumentos
+        if base_cmd == 'takeoff':
+            self.takeoff()
+        elif base_cmd == 'land':
+            self.land()
+        elif base_cmd == 'emergency':
+            self.add_command('emergency')
+        # Comandos com 1 argumento (distância ou graus)
+        elif base_cmd in ['up', 'down', 'left', 'right', 'forward', 'back', 'cw', 'ccw']:
+            if len(parts) == 2:
+                self.add_command(cmd)
+            else:
+                print(f"Erro: O comando '{base_cmd}' requer um valor (ex: '{base_cmd} 50').")
+        else: # Nenhum dos anteriores, trata como comando desconhecido
+            print(f"Comando desconhecido: '{base_cmd}'")
+
+    def add_command(self, command: str) -> None:
+        """
+        Enfileira um comando.
+        Args:
+            command (str): Comando a ser enfileirado
+        """
+        try:
+            self.command_queue.put(command)
+            print(f"Comando enfileirado: {command}\n")
+        except Exception as e:
+            print(f"Erro ao adicionar comando: {e}")
+
+    def add_periodic_event(self, cmd: str, period: int, info: str = "", interval: int = 10) -> None:
         """
         Adiciona evento periódico.
         Args:
@@ -122,7 +298,17 @@ class TelloZune:
             period (int): Período em frames
             info (str): Informação adicional
         """
-        self.event_list.append({'cmd':str(cmd), 'period':int(period), 'info':str(info), 'val':str("")})
+        # Divide a rota em comandos individuais. Ex: "forward 100 e cw 90" -> ['forward 100', 'cw 90']
+        command_list = [c.strip() for c in cmd.split(' e ')]
+
+        # Adiciona a rota como um único evento
+        self.event_list.append({
+            'commands': command_list,
+            'period': int(period),
+            'interval': int(interval), # Intervalo em segundos
+            'info': str(info)
+        })
+        print(f"Evento periódico adicionado: {info}, período: {period} frames, comandos: {command_list}")
 
     def remove_periodic_event(self, cmd: str) -> None:
         """
@@ -130,97 +316,24 @@ class TelloZune:
         Args:
             cmd (str): Comando a ser removido
         """
-        self.event_list = [ev for ev in self.event_list if ev['cmd'] != cmd]
+        self.event_list = [ev for ev in self.event_list if ev['commands'] != cmd]
 
-    def remove_last_event(self) -> dict:
+    def remove_last_event(self, qtd: int=1) -> list[dict] | None:
         """
-        Remove o último evento adicionado.
+        Remove o(s) último(s) evento(s) adicionado(s).
+        Args:
+            qtd (int): Quantidade de eventos a remover (opcional, padrão=1)
         Returns:
-            dict: Evento removido
+            list[dict]: Eventos removidos ou None se nenhum foi removido
         """
-        return self.event_list.pop()
-
-    def _periodic_cmd(self) -> None:
-        """Thread para enviar comandos periódicos."""
-        try:
-            for ev in self.event_list:
-                period = ev['period']
-                if self.cmd_count % int(period) == 0:
-                    cmd = ev['cmd']
-                    info = ev['info']
-                    ret = self.send_cmd_return(cmd).rstrip()
-                    ev['val'] = str(ret)
-            self.timer_ev.wait(0.1)
-            self.cmd_count += 1
-        except Exception:
-            pass
-
-    def _periodic_state(self) -> None:
-        for ev in self.state_list:
-            if self.state_count % ev['period'] == 0:
-                raw = self.get_state_field(ev['state']) or ''
-                ev['val'] = raw.rstrip()
-        self.timer_ev.wait(0.1)
-        self.state_count += 1
-
-    def _response_cmd_receive(self) -> None:
-        """Recebe strings de resposta de comando."""
-        try:
-            data, _ = self.sock_cmd.recvfrom(2048)
-            self.udp_cmd_ret = data.decode(encoding="utf-8")
-            self.cmd_recv_ev.set()
-        except Exception as e:
-            print(f"Erro na thread de recebimento de comando: {e}")
-
-    def _state_receive(self) -> None:
-        """Recebe strings de estado."""
-        try:
-            data, _ = self.sock_state.recvfrom(512)
-            val = data.decode(encoding="utf-8").rstrip()
-            self.state_value = val.replace(';',':').split(':')
-        except Exception as e:
-            print(f"Erro na thread de estado: {e}")
-
-    def _read_queue(self) -> None:
-        """Lê comandos da fila, envia ao drone e exibe resposta."""
-        try:
-            # Tenta pegar um comando; se não houver em 1s, dispara Empty
-            cmd = self.command_queue.get(timeout=1)
-        except Empty:
-            return # Sem comando, volta ao loop
-
-        self.send_cmd(cmd) # Envia o comando
-
-        if self.cmd_recv_ev.wait(timeout=2) and self.udp_cmd_ret: # Espera pela resposta
-            resp = self.udp_cmd_ret.rstrip()
-            self.cmd_recv_ev.clear()
-        else:
-            resp = '' # Timeout sem resposta
-
-        print(f"{cmd}\t|{resp}")
-
-        # Pequeno intervalo para não sobrecarregar
-        time.sleep(0.1)
-
-    def _text_input(self) -> None:
-        """Thread para entrada de texto."""
-        try:
-            cmd = input("Comando digitado: ")
-            if cmd.lower() == 'exit':
-                self.textInputThread.stop()
-            self.add_command(cmd)
-        except KeyboardInterrupt:
-            self.textInputThread.stop()
-        except Exception as e:
-            print(f"Erro na entrada de texto: {e}")
-
-    def add_command(self, command: str) -> None:
-        """Enfileira um comando."""
-        try:
-            self.command_queue.put(command)
-            print(f"Comando enfileirado: {command}\n")
-        except Exception as e:
-            print(f"Erro ao adicionar comando: {e}")
+        removed_events = []
+        for _ in range(qtd):
+            if len(self.event_list) == 1:  # Mantém o evento de keep alive
+                if not removed_events:
+                    print("Nenhum evento para remover.")
+                break
+            removed_events.append(self.event_list.pop())
+        return removed_events if removed_events else None
 
     def set_image_size(self, image_size: tuple[int, int] = (960, 720)) -> None:
         """
@@ -255,9 +368,11 @@ class TelloZune:
         """
         Inicia threads de comunicação e leitura de comandos.
         """
-        if self.receiverThread.is_alive() is not True: self.receiverThread.start()
-        if self.periodicCmdThread.is_alive() is not True: self.periodicCmdThread.start()
-        if self.stateThread.is_alive() is not True: self.stateThread.start()
+        if self.receiverThread.is_alive() is not True: self.receiverThread.start() # Thread de resposta
+        if self.periodicCmdThread.is_alive() is not True: self.periodicCmdThread.start() # Thread de comandos periódicos
+        if self.stateThread.is_alive() is not True: self.stateThread.start() # Thread de estado
+        if self.movesThread.is_alive() is not True: self.movesThread.start() # Thread de movimentos
+        if self.periodicStateThread.is_alive() is not True: self.periodicStateThread.start() # Thread de estado periódico
         print("Iniciando comunicação")
 
     def start_video(self) -> None:
@@ -316,7 +431,7 @@ class TelloZune:
             str: Resposta do drone. Verifique a documentação do SDK do Tello para os comandos válidos.
         """
         self.udp_cmd_ret = str()
-        cmd_bytes = cmd.encode(encoding="utf-8")
+        cmd_bytes = cmd.encode("utf-8")
         _ = self.sock_cmd.sendto(cmd_bytes, self.telloaddr)
         self.cmd_recv_ev.wait(1)
         self.cmd_recv_ev.clear()
@@ -328,7 +443,7 @@ class TelloZune:
         Args:
             cmd (str): Consulte a documentação do SDK do Tello para os comandos válidos.
         """
-        cmd_bytes = cmd.encode(encoding="utf-8")
+        cmd_bytes = cmd.encode("utf-8")
         _ = self.sock_cmd.sendto(cmd_bytes, self.telloaddr)
 
     def send_rc_control(self, left_right_velocity: int, forward_backward_velocity: int, up_down_velocity: int, yaw_velocity: int) -> None:
@@ -368,14 +483,11 @@ class TelloZune:
             bool: True se inicialização bem-sucedida, False caso contrário.
         """
         if not self.receiverThread.is_alive():
-            is_connected = self.wait_till_connected() # A chamada agora retorna True ou False
-            
+            is_connected = self.wait_till_connected() # A chamada retorna True ou False
             if not is_connected: # Se a conexão falhou, interrompe a inicialização
                 return False
-
             self.start_communication()
             self.start_video()
-
         if self.enable_text_input:
             if not self.textInputThread.is_alive():
                 self.textInputThread.start()
@@ -384,11 +496,8 @@ class TelloZune:
         return True
 
     def end_tello(self) -> None:
-        """
-        Finaliza o drone Tello. Pousa se possivel, encerra o video e a comunicacao.
-        """
+        """Finaliza o drone Tello. Pousa se possivel, encerra o video e a comunicacao."""
         self.stop_video()
-        self.land()
         self.stop_communication()
 
     def get_state_field(self, key: str) -> str:
@@ -400,7 +509,6 @@ class TelloZune:
             str: Field value
         """
         state = self.state_value
-
         if key in state:
             index = state.index(key) + 1
             return state[index]
