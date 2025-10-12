@@ -318,19 +318,22 @@ class TelloZune:
         """
         self.event_list = [ev for ev in self.event_list if ev['commands'] != cmd]
 
-    def remove_last_event(self, qtd: int=1) -> dict | None:
+    def remove_last_event(self, qtd: int=1) -> list[dict] | None:
         """
         Remove o(s) último(s) evento(s) adicionado(s).
         Args:
             qtd (int): Quantidade de eventos a remover (opcional, padrão=1)
         Returns:
-            dict: Evento removido
+            list[dict]: Eventos removidos ou None se nenhum foi removido
         """
+        removed_events = []
         for _ in range(qtd):
-            if len(self.event_list) == 1: # Mantém o evento de keep alive
-                print("Nenhum evento para remover.")
-                return {}
-            return self.event_list.pop()
+            if len(self.event_list) == 1:  # Mantém o evento de keep alive
+                if not removed_events:
+                    print("Nenhum evento para remover.")
+                break
+            removed_events.append(self.event_list.pop())
+        return removed_events if removed_events else None
 
     def set_image_size(self, image_size: tuple[int, int] = (960, 720)) -> None:
         """
