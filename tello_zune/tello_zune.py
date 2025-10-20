@@ -54,7 +54,7 @@ class TelloZune:
         self.elapsed_time = 0
         self.last_rc_control_timestamp = 0
         self.udp_cmd_ret = ''
-        self.TIME_BTW_RC_CONTROL_COMMANDS = 0.001  # Intervalo entre comandos de controle remoto
+        self.TIME_BTW_RC_CONTROL_COMMANDS = 0.001 # Intervalo entre comandos de controle remoto
         self.video = None
 
         # Fila de frames
@@ -70,7 +70,7 @@ class TelloZune:
         self.cmd_count = 1
         self.state_count = 1
         self.event_list: list[dict] = []
-        self.event_list.append({'commands': ['command'], 'period': 150, 'interval': 0, 'info': 'keep alive'})
+        self.event_list.append({'commands': ['command'], 'period': 100, 'interval': 0, 'info': 'keep alive'})
         self.state_list = [
             {'state': 'bat',    'period': 200, 'info': 'Porcentagem de bateria', 'val': '80'},
             {'state': 'tof',    'period': 25,  'info': 'Altura em cm',           'val': '10'},
@@ -170,8 +170,8 @@ class TelloZune:
                         continue # Pula a execução deste evento
 
                     # Execução normal
-                    # Trata como rota se tiver mais de um comando e nenhuma rota estiver ativa
-                    if len(ev['commands']) > 1 and not self.is_route_active:
+                    # Trata como rota se tiver mais de um comando, nenhuma rota estiver ativa e o intervalo for maior que 0
+                    if len(ev['commands']) > 1 and not self.is_route_active and ev['interval'] > 0:
                         print(f"Disparando rota periódica: {ev.get('info', 'N/A')}")
                         threading.Thread(
                             target=self._execute_route,

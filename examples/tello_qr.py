@@ -1,7 +1,6 @@
 import cv2
 from pyzbar.pyzbar import decode
 from tello_zune import TelloZune
-from ui.display_utils import write_info
 
 #cap = cv2.VideoCapture(0)
 data = []
@@ -9,11 +8,15 @@ data = []
 tello = TelloZune()
 tello.start_tello()
 
-"""
-Recebe um frame, detecta os códigos desenhando as bordas e o texto,
-armazena o texto em uma lista e retorna o frame
-"""
-def process(frame):
+def process(frame: cv2.Mat) -> cv2.Mat:
+    """
+    Recebe um frame, detecta os códigos desenhando as bordas e o texto,
+    armazena o texto em uma lista e retorna o frame
+    Args:
+        frame: frame capturado da câmera
+    Returns:
+        frame: frame processado com os códigos desenhados
+    """
     decoded_objects = decode(frame)
     for obj in decoded_objects:
         (x, y, w, h) = obj.rect
@@ -26,18 +29,15 @@ def process(frame):
     #print(data)
     return frame
 
-stats = {
-    "fps": True,
-    "battery": True,
-    "height": True,
-    "temperature": True,
-    "pressure": True,
-    "time_elapsed": True
-}
 while True:
     #ret, frame = cap.read()
     ret, frame = tello.get_frame()
-    write_info(frame, tello, stats)
+    battery, height, temperature, pressure, time = tello.get_info()
+    cv2.putText(frame, f'Battery: {battery}%', (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+    cv2.putText(frame, f'Height: {height}cm', (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+    cv2.putText(frame, f'Temperature: {temperature}C', (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+    cv2.putText(frame, f'Pressure: {pressure}Pa', (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+    cv2.putText(frame, f'Time: {time}s', (10, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
     if not ret:
         print('erro na captura do frame')
         break
