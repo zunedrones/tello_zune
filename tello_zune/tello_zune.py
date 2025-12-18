@@ -182,7 +182,6 @@ class TelloZune:
                     # Trata como comando simples se tiver exatamente um comando
                     elif len(ev['commands']) == 1:
                         cmd = ev['commands'][0]
-                        print(f"Enviando comando periódico simples: '{cmd}'")
                         self.add_command(cmd)
 
             self.timer_ev.wait(0.1)
@@ -234,7 +233,7 @@ class TelloZune:
             self.cmd_recv_ev.clear()
         else:
             resp = '' # Timeout sem resposta
-        print(f"{cmd}\t{resp}")     
+        print(f"{cmd}\t{resp}")
         time.sleep(0.1) # Pequeno intervalo para não sobrecarregar
 
     def _text_input(self) -> None:
@@ -286,7 +285,6 @@ class TelloZune:
         """
         try:
             self.command_queue.put(command)
-            print(f"Comando enfileirado: {command}\n")
         except Exception as e:
             print(f"Erro ao adicionar comando: {e}")
 
@@ -328,11 +326,12 @@ class TelloZune:
         """
         removed_events = []
         for _ in range(qtd):
-            if len(self.event_list) == 1:  # Mantém o evento de keep alive
+            if len(self.event_list) == 1: # Mantém o evento de keep alive
                 if not removed_events:
                     print("Nenhum evento para remover.")
                 break
             removed_events.append(self.event_list.pop())
+        print(f"Eventos removidos: {removed_events}")
         return removed_events if removed_events else None
 
     def set_image_size(self, image_size: tuple[int, int] = (960, 720)) -> None:
@@ -365,9 +364,7 @@ class TelloZune:
         print("Comunicação finalizada")
 
     def start_communication(self) -> None:
-        """
-        Inicia threads de comunicação e leitura de comandos.
-        """
+        """Inicia threads de comunicação e leitura de comandos."""
         if self.receiverThread.is_alive() is not True: self.receiverThread.start() # Thread de resposta
         if self.periodicCmdThread.is_alive() is not True: self.periodicCmdThread.start() # Thread de comandos periódicos
         if self.stateThread.is_alive() is not True: self.stateThread.start() # Thread de estado
@@ -376,9 +373,7 @@ class TelloZune:
         print("Iniciando comunicação")
 
     def start_video(self) -> None:
-        """
-        Inicia a transmissão de vídeo do Tello.
-        """
+        """Inicia a transmissão de vídeo do Tello."""
         self.send_cmd('streamon')
 
         time.sleep(1)
@@ -398,6 +393,10 @@ class TelloZune:
         """
         Bloqueia a execução até que o drone Tello esteja conectado.
         Use este método no início do seu código para garantir que o drone esteja pronto para receber comandos.
+        Args:
+            timeout (int): Tempo máximo de espera em segundos. Padrão é 10 segundos.
+        Returns:
+            bool: True se conectado com sucesso, False se o tempo limite for excedido.
         """
         # Inicia a thread que ouve as respostas do drone
         if not self.receiverThread.is_alive():
@@ -462,13 +461,13 @@ class TelloZune:
             self.send_cmd(cmd)
 
     def takeoff(self) -> None:
-        """Decola o drone Tello."""
+        """Decola o drone."""
         print("Decolando")
         self.add_command("takeoff")
         # time.sleep(4)
     
     def land(self) -> None:
-        """Pousa o drone Tello."""
+        """Pousa o drone."""
         print("Pousando")
         while float(self.get_state_field('tof')) >= 30:
             self.send_rc_control(0, 0, -70, 0)
