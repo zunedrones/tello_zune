@@ -1,6 +1,8 @@
 import time
 import threading
 import numpy as np
+import socket
+import cv2
 from queue import Queue, Empty
 
 class SafeThread(threading.Thread):
@@ -27,8 +29,6 @@ class TelloZune:
     Args:
         text_input (bool, optional): Se True, aceita comandos de texto via terminal. Padrão: False.
     """
-    import socket
-    import cv2
     def __init__(
         self,
         TELLOIP: str = '192.168.10.1',
@@ -63,6 +63,9 @@ class TelloZune:
 
         # Fila de comandos
         self.command_queue: Queue[str] = Queue()
+        self.command_events: dict[str, threading.Event] = {}
+        self.current_command = None
+        self.cmd_lock = threading.Lock()
 
         # Eventos e contadores
         self.cmd_recv_ev = threading.Event()
@@ -80,9 +83,9 @@ class TelloZune:
         ]
 
         # Sockets
-        self.sock_cmd = self.socket.socket(self.socket.AF_INET, self.socket.SOCK_DGRAM)
+        self.sock_cmd = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock_cmd.bind(self.localaddr)
-        self.sock_state = self.socket.socket(self.socket.AF_INET, self.socket.SOCK_DGRAM)
+        self.sock_state = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock_state.bind(self.stateaddr)
 
         # Threads cíclicas seguras
@@ -91,13 +94,12 @@ class TelloZune:
         self.videoThread = SafeThread(target=self._video) # Thread de vídeo
         self.stateThread = SafeThread(target=self._state_receive) # Thread de estado
         self.movesThread = SafeThread(target=self._read_queue) # Thread de movimentos
-        self.periodicStateThread = SafeThread(target=self._periodic_state) # Thread de estado periódico
         self.textInputThread = SafeThread(target=self._text_input) # Thread de entrada de texto pelo terminal
 
         # Inicialização
         self.enable_text_input = text_input
 
-    def _execute_route(self, commands: list, interval: int) -> None:
+    def _execute_route(self, commands: list, interval: int=0) -> None:
         """
         Executa uma sequência de comandos (rota) em sua própria thread.
         Args:
@@ -110,11 +112,9 @@ class TelloZune:
                 print(f"Executando passo {i + 1}/{len(commands)} da rota: '{cmd}'")
                 self.add_command(cmd)
 
-                # Espera o intervalo definido antes do próximo comando
-                # Não executa a espera após o último comando
-                if i < len(commands) - 1:
-                    print(f"Aguardando {interval} segundos...")
-                    time.sleep(interval)
+                # Se não for o último comando e houver intervalo, manda o comando "delay"
+                if i < len(commands) - 1 and interval > 0:
+                    self.add_command(f"delay {interval}")
         except Exception as e:
             print(f"Erro ao executar a rota: {e}")
         finally:
@@ -128,7 +128,7 @@ class TelloZune:
             if self.video is not None:
                 ret, frame = self.video.read()
                 if ret:
-                    frame = self.cv2.resize(frame, self.image_size)
+                    frame = cv2.resize(frame, self.image_size)
                     self.frame = frame
                     if not self.q.full():
                         self.q.put(frame)
@@ -191,18 +191,6 @@ class TelloZune:
             print(f"Erro na thread de comandos periódicos: {e}")
             time.sleep(1)
 
-    def _periodic_state(self) -> None:
-        """Atualiza valores em state_list periodicamente."""
-        try:
-            for ev in self.state_list:
-                if self.state_count % ev['period'] == 0:
-                    raw = self.get_state_field(ev['state']) or ''
-                    ev['val'] = raw.rstrip()
-            self.timer_ev.wait(0.1)
-            self.state_count += 1
-        except Exception as e:
-            print(f"Erro na thread de atualização de estado: {e}")
-
     def _response_cmd_receive(self) -> None:
         """Recebe strings de resposta de comando via socket UDP."""
         try:
@@ -213,28 +201,37 @@ class TelloZune:
             print(f"Erro na thread de recebimento de comando: {e}")
 
     def _state_receive(self) -> None:
-        """Recebe strings de estado via socket UDP."""
+        """Recebe strings de estado via socket UDP e atualiza state_value e state_list."""
         try:
             data, _ = self.sock_state.recvfrom(512)
             val = data.decode("utf-8").rstrip()
             self.state_value = val.replace(';', ':').split(':')
+            for state in self.state_list:
+                if self.state_count % state['period'] == 0:
+                    raw = self.get_state_field(state['state']) or ''
+                    state['val'] = raw.rstrip()
+            self.state_count += 1
         except Exception as e:
             print(f"Erro na thread de estado: {e}")
 
-    def _read_queue(self) -> None:
+    def _read_queue(self):
         """Lê comandos da fila, envia ao drone e exibe resposta."""
         try:
-            cmd = self.command_queue.get(timeout=1) # Tenta pegar um comando; se não houver em 1s, dispara Empty
+            cmd = self.command_queue.get(timeout=1)
+            self.current_command = cmd
+            
+            if cmd.startswith("delay"): # Novo comando: "delay x" para pausar x segundos
+                seconds = float(cmd.split()[1])
+                time.sleep(seconds)
+                return
+
+            timeout = 8.0 if cmd.split()[0] in ['forward','back','left','right','up','down','cw','ccw'] else 2.0
+            resp = self.send_cmd_return(cmd, timeout=timeout)
+
+            print(f"{cmd}\t{resp}")
+            time.sleep(0.01)
         except Empty:
-            return # Sem comando, volta ao loop
-        self.send_cmd(cmd) # Envia o comando
-        if self.cmd_recv_ev.wait(timeout=2) and self.udp_cmd_ret: # Espera pela resposta
-            resp = self.udp_cmd_ret.rstrip()
-            self.cmd_recv_ev.clear()
-        else:
-            resp = '' # Timeout sem resposta
-        print(f"{cmd}\t{resp}")
-        time.sleep(0.1) # Pequeno intervalo para não sobrecarregar
+            return
 
     def _text_input(self) -> None:
         """Thread que lê comandos de texto do terminal."""
@@ -342,13 +339,17 @@ class TelloZune:
         """
         self.image_size = image_size
 
-    def get_frame(self) -> np.ndarray:
+    def get_frame(self, timeout: float = 1.0) -> np.ndarray:
         """
         Retorna próximo frame da fila.
         Returns:
             np.ndarray: Frame do vídeo (920x720)
         """
-        return self.q.get()
+        try:
+            return self.q.get(timeout=timeout)
+        except Empty:
+            # Retorna um frame preto
+            return np.zeros((self.image_size[1], self.image_size[0], 3), dtype=np.uint8)
 
     def stop_communication(self) -> None:
         """Para threads e fecha sockets."""
@@ -358,7 +359,6 @@ class TelloZune:
         self.movesThread.stop()
         self.sock_cmd.close()
         self.sock_state.close()
-        self.periodicStateThread.stop()
         if self.textInputThread.is_alive():
             self.textInputThread.stop()
         print("Comunicação finalizada")
@@ -369,7 +369,6 @@ class TelloZune:
         if self.periodicCmdThread.is_alive() is not True: self.periodicCmdThread.start() # Thread de comandos periódicos
         if self.stateThread.is_alive() is not True: self.stateThread.start() # Thread de estado
         if self.movesThread.is_alive() is not True: self.movesThread.start() # Thread de movimentos
-        if self.periodicStateThread.is_alive() is not True: self.periodicStateThread.start() # Thread de estado periódico
         print("Iniciando comunicação")
 
     def start_video(self) -> None:
@@ -378,7 +377,7 @@ class TelloZune:
 
         time.sleep(1)
 
-        self.video = self.cv2.VideoCapture(self.video_source, self.cv2.CAP_FFMPEG)
+        self.video = cv2.VideoCapture(self.video_source, cv2.CAP_FFMPEG)
 
         if not self.videoThread.is_alive():
             self.videoThread.start()
@@ -420,21 +419,27 @@ class TelloZune:
         print(f"Falha na conexão: Tempo limite de {timeout}s excedido. Verifique se o drone está ligado")
         return False
 
-    def send_cmd_return(self, cmd: str) -> str:
+    def send_cmd_return(self, cmd: str, timeout: float = 1.0) -> str:
         """
         Envia um comando para o drone Tello via UDP e espera pela resposta.
         O comando é enviado via UDP e a resposta é recebida na mesma conexão.
         Args:
             cmd (str): Comando a ser enviado para o drone.
+            timeout (float): Tempo máximo de espera em segundos. Padrão é 1.0 segundo.
         Returns:
             str: Resposta do drone. Verifique a documentação do SDK do Tello para os comandos válidos.
         """
-        self.udp_cmd_ret = str()
-        cmd_bytes = cmd.encode("utf-8")
-        _ = self.sock_cmd.sendto(cmd_bytes, self.telloaddr)
-        self.cmd_recv_ev.wait(1)
-        self.cmd_recv_ev.clear()
-        return self.udp_cmd_ret
+        with self.cmd_lock:
+            self.cmd_recv_ev.clear()
+            self.udp_cmd_ret = ""
+            
+            cmd_bytes = cmd.encode("utf-8")
+            self.sock_cmd.sendto(cmd_bytes, self.telloaddr)
+            
+            # Espera a resposta (a thread recebedora vai dar .set() no evento)
+            self.cmd_recv_ev.wait(timeout)
+            
+            return self.udp_cmd_ret
 
     def send_cmd(self, cmd: str) -> None:
         """
@@ -469,10 +474,18 @@ class TelloZune:
     def land(self) -> None:
         """Pousa o drone."""
         print("Pousando")
-        while float(self.get_state_field('tof')) >= 30:
-            self.send_rc_control(0, 0, -70, 0)
-        self.add_command("land")
-        #time.sleep(4)
+        answer = self.send_cmd_return("land", timeout=5.0) # Bom dar um timeout maior no pouso
+        trys = 0
+        max_trys = 3
+        
+        while answer != 'ok' and trys < max_trys:
+            print(f"Resposta inesperada para 'land': '{answer}'. Tentando novamente...")
+            time.sleep(1)
+            answer = self.send_cmd_return("land", timeout=5.0)
+            trys += 1
+            
+        if answer != 'ok':
+            print("Aviso: Falha ao confirmar pouso após várias tentativas.")
 
     def start_tello(self) -> bool:
         """
@@ -493,6 +506,20 @@ class TelloZune:
             print("Entrada de texto habilitada.")
         
         return True
+    
+    def is_vertical_moving(self, height_threshold: float = 5.0, sample_interval: float = 0.1) -> bool:
+        """
+        Detecta movimento vertical comparando a altura em dois instantes.
+        Args:
+            height_threshold (float): Diferença mínima de altura (cm) para considerar que está se movendo verticalmente.
+            sample_interval (float): Tempo em segundos entre as duas amostras de altura.
+        Returns:
+            bool: True se o drone estiver se movendo verticalmente, False caso contrário.
+        """
+        h1 = float(self.get_state_field('tof'))
+        time.sleep(sample_interval)
+        h2 = float(self.get_state_field('tof'))
+        return abs(h2 - h1) > height_threshold
 
     def end_tello(self) -> None:
         """Finaliza o drone Tello. Pousa se possivel, encerra o video e a comunicacao."""
@@ -549,3 +576,31 @@ class TelloZune:
             d.get('baro'),
             d.get('time'),
         )
+    
+    def get_speed(self) -> tuple[float, float, float]:
+        """
+        Retorna a velocidade atual do drone.
+        Returns:
+            tuple: (vx, vy, vz) velocidades em cm/s
+        """
+        try:
+            vx = float(self.get_state_field('vgx'))
+            vy = float(self.get_state_field('vgy'))
+            vz = float(self.get_state_field('vgz'))
+            return vx, vy, vz
+        except (ValueError, TypeError):
+            return 0.0, 0.0, 0.0
+
+    def clear_command_queue(self):
+        """Limpa a fila de comandos"""
+        with self.command_queue.mutex:
+            self.command_queue.queue.clear()
+        print("Fila de comandos limpa.")
+
+    def emergency_stop(self):
+        """
+        Envia comando de emergência para o drone, parando-o imediatamente. Limpa a fila de comandos antes de enviar o comando de emergência.
+        """
+        self.clear_command_queue()
+        self.send_cmd("emergency")
+
