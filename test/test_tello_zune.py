@@ -1,10 +1,11 @@
-import unittest
-from unittest.mock import patch, MagicMock
 import threading
 import time
+import unittest
+from unittest.mock import MagicMock, patch
 
 # Importa a sua classe (certifique-se de que o arquivo principal se chama tello_zune.py)
 from tello_zune.tello_zune import TelloZune
+
 
 class TestTelloZune(unittest.TestCase):
 

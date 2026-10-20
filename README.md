@@ -15,11 +15,21 @@ A Tello Zune gerencia filas de comandos assíncronas, faz monitoramento contínu
 
 ## Pré-requisitos e Instalação
 
-Certifique-se de ter o Python 3 instalado. As dependências principais da biblioteca estão no requirements.txt.
+Este projeto utiliza o [uv](https://docs.astral.sh/uv/) para gerenciamento de pacotes e ambiente virtual, com as dependências definidas no `pyproject.toml`.
 
-Instale a Tello Zune:
+Para instalar a biblioteca em um projeto existente via `uv`:
 ```bash
-pip install tello-zune
+uv add tello-zune
+```
+
+Para clonar e configurar o ambiente de desenvolvimento localmente:
+```bash
+uv sync
+```
+
+Para adicionar novas dependências ao projeto:
+```bash
+uv add <pacote>
 ```
 
 Conecte o seu computador à rede Wi-Fi do drone Tello antes de executar os scripts.
@@ -28,13 +38,19 @@ Conecte o seu computador à rede Wi-Fi do drone Tello antes de executar os scrip
 
 ## Como Usar (Exemplos)
 
-Na pasta `examples/` você encontra scripts prontos para testar as capacidades da Tello Zune.
+Na pasta `examples/` você encontra scripts prontos para testar as capacidades da Tello Zune. Utilize `uv run` para executá-los dentro do ambiente virtual do projeto:
 
 ### 1. Controle por Terminal de Texto (`text_commands.py`)
 Este exemplo inicia a câmera do Tello com um HUD de telemetria na tela. Ao mesmo tempo, ele habilita o terminal para que você digite comandos de voo (como `takeoff`, `forward 50`, `cw 90`) manualmente.
+```bash
+uv run python examples/text_commands.py
+```
 
 ### 2. Rotas e Comandos Periódicos (`periodic_commands.py`)
 Neste exemplo, o drone é programado para executar uma rota periódica de "Vigilância". Ele se moverá para frente 50cm e girará 90 graus a cada intervalo de tempo determinado, operando de forma autônoma.
+```bash
+uv run python examples/periodic_commands.py
+```
 
 ---
 
@@ -54,5 +70,5 @@ Aqui estão algumas das funções mais úteis para controlar o Tello programatic
 A biblioteca possui cobertura de testes unitários para garantir a estabilidade das funções de rede e de concorrência. Para executar os testes na raiz do projeto, utilize:
 
 ```bash
-python -m unittest discover -s test -v
+uv run python -m unittest discover -s test -v
 ```
