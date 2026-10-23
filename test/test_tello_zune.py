@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch, MagicMock
 import threading
 import time
+import numpy as np
 
 # Importa a sua classe (certifique-se de que o arquivo principal se chama tello_zune.py)
 from tello_zune.tello_zune import TelloZune
@@ -107,6 +108,82 @@ class TestTelloZune(unittest.TestCase):
             unittest.mock.call("land")
         ]
         mock_add_command.assert_has_calls(expected_calls, any_order=False)
+
+    def _feed_frames(self, frames):
+        """Simula o stream de vídeo entregando os frames dados, um por chamada de _video()."""
+        self.tello.video = MagicMock()
+        self.tello.video.read.side_effect = [(True, f) for f in frames]
+        for _ in frames:
+            self.tello._video()
+
+    def test_get_frame_returns_latest(self):
+        """get_frame() deve entregar o frame mais recente, não o primeiro que entrou na fila."""
+        frames = [np.full((720, 960, 3), i, dtype=np.uint8) for i in range(3)]
+        self._feed_frames(frames)
+        self.assertEqual(self.tello.get_frame()[0, 0, 0], 2)
+
+    def test_get_frame_stamped(self):
+        """get_frame_stamped() devolve frame novo com timestamp e None quando não há frame novo."""
+        self._feed_frames([np.zeros((720, 960, 3), dtype=np.uint8)])
+        result = self.tello.get_frame_stamped(timeout=0.1)
+        self.assertIsNotNone(result)
+        frame, stamp = result
+        self.assertEqual(frame.shape, (720, 960, 3))
+        self.assertAlmostEqual(stamp, time.time(), delta=1.0)
+        # O mesmo frame não é entregue duas vezes
+        self.assertIsNone(self.tello.get_frame_stamped(timeout=0.05))
+
+    def test_video_resizes_frames(self):
+        """Frames de tamanho diferente de image_size são redimensionados."""
+        self._feed_frames([np.zeros((360, 480, 3), dtype=np.uint8)])
+        frame, _ = self.tello.get_frame_stamped(timeout=0.1)
+        self.assertEqual(frame.shape, (720, 960, 3))
+
+    def test_get_state(self):
+        """get_state() converte todos os campos numéricos e marca o instante de chegada."""
+        self.tello.sock_state.recvfrom.return_value = (
+            b'pitch:1;roll:-2;yaw:90;vgx:3;tof:85;mpry:0,0,0;bat:77;\r\n', None)
+        self.tello._state_receive()
+        state = self.tello.get_state()
+        self.assertEqual(state['pitch'], 1.0)
+        self.assertEqual(state['roll'], -2.0)
+        self.assertEqual(state['yaw'], 90.0)
+        self.assertEqual(state['tof'], 85.0)
+        self.assertEqual(state['bat'], 77.0)
+        self.assertNotIn('mpry', state)
+        self.assertAlmostEqual(self.tello.state_stamp, time.time(), delta=1.0)
+
+    def test_get_state_field_last_key(self):
+        """get_state_field() não quebra se a chave for o último elemento."""
+        self.tello.state_value = ['bat', '80', 'tof']
+        self.assertEqual(self.tello.get_state_field('tof'), '')
+
+    def test_send_rc_control_saturates(self):
+        """Valores de rc são arredondados e saturados em -100~100."""
+        self.tello.send_rc_control(150, -150, 10.6, 0)
+        self.mock_sock_cmd.sendto.assert_called_once_with(b'rc 100 -100 11 0', ('192.168.10.1', 8889))
+
+    def test_rc_watchdog(self):
+        """Com watchdog ativo, envia 'rc 0 0 0 0' quando o último rc em movimento fica velho."""
+        self.tello.send_rc_control(0, 20, 0, 0)
+        self.mock_sock_cmd.sendto.reset_mock()
+
+        self.tello._check_rc_watchdog() # Desativado: não faz nada
+        self.mock_sock_cmd.sendto.assert_not_called()
+
+        self.tello.set_rc_watchdog(0.3)
+        self.tello._check_rc_watchdog() # rc recente: não faz nada
+        self.mock_sock_cmd.sendto.assert_not_called()
+
+        self.tello.last_rc_control_timestamp -= 1.0
+        self.tello._check_rc_watchdog()
+        self.mock_sock_cmd.sendto.assert_called_once_with(b'rc 0 0 0 0', ('192.168.10.1', 8889))
+
+        # Já parado: não reenvia
+        self.mock_sock_cmd.sendto.reset_mock()
+        self.tello.last_rc_control_timestamp -= 1.0
+        self.tello._check_rc_watchdog()
+        self.mock_sock_cmd.sendto.assert_not_called()
 
 if __name__ == '__main__':
     unittest.main()
