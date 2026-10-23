@@ -3,5 +3,6 @@ build/
 tello_zune.egg-info/
 dist/
 __pycache__/
-zune/.coverage
+zune/
+.coverage
 .ruff_cache/
