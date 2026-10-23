@@ -57,9 +57,21 @@ class TelloZune:
         self.TIME_BTW_RC_CONTROL_COMMANDS = 0.001 # Intervalo entre comandos de controle remoto
         self.video = None
 
-        # Fila de frames
+        # Watchdog do rc: se nenhum rc chegar em rc_watchdog_timeout segundos, envia 'rc 0 0 0 0'.
+        # None desativa (padrão, mantém o comportamento anterior).
+        self.rc_watchdog_timeout: float | None = None
+        self.rc_is_moving = False
+
+        # Fila de frames (sempre guarda o frame mais recente)
         self.q = Queue(maxsize=1)
         self.frame = None
+        self.frame_stamp: float | None = None # time.time() quando o frame foi lido do stream
+        self.frame_seq = 0 # Incrementa a cada frame novo
+        self._stamped_seq = 0 # Último frame_seq entregue por get_frame_stamped()
+        self.frame_cond = threading.Condition()
+
+        # Estado recebido pela porta 8890
+        self.state_stamp: float | None = None # time.time() quando o último pacote de estado chegou
 
         # Fila de comandos
         self.command_queue: Queue[str] = Queue()
@@ -128,12 +140,25 @@ class TelloZune:
             if self.video is not None:
                 ret, frame = self.video.read()
                 if ret:
-                    frame = cv2.resize(frame, self.image_size)
-                    self.frame = frame
-                    if not self.q.full():
-                        self.q.put(frame)
+                    stamp = time.time()
+                    if (frame.shape[1], frame.shape[0]) != tuple(self.image_size):
+                        frame = cv2.resize(frame, self.image_size)
+                    with self.frame_cond:
+                        self.frame = frame
+                        self.frame_stamp = stamp
+                        self.frame_seq += 1
+                        self.frame_cond.notify_all()
+                    # Descarta o frame antigo para que get_frame() entregue sempre o mais recente
+                    try:
+                        self.q.get_nowait()
+                    except Empty:
+                        pass
+                    self.q.put(frame)
+                else:
+                    time.sleep(0.005) # Evita laço ocupado enquanto o stream não entrega frames
             else:
                 print("Erro: self.video é None, não é possível ler o frame.")
+                time.sleep(1)
         except Exception as e:
             print(f"Erro na thread de vídeo: {e}")
 
@@ -184,6 +209,7 @@ class TelloZune:
                         cmd = ev['commands'][0]
                         self.add_command(cmd)
 
+            self._check_rc_watchdog()
             self.timer_ev.wait(0.1)
             self.cmd_count += 1
 
@@ -204,6 +230,7 @@ class TelloZune:
         """Recebe strings de estado via socket UDP e atualiza state_value e state_list."""
         try:
             data, _ = self.sock_state.recvfrom(512)
+            self.state_stamp = time.time()
             val = data.decode("utf-8").rstrip()
             self.state_value = val.replace(';', ':').split(':')
             for state in self.state_list:
@@ -343,13 +370,32 @@ class TelloZune:
         """
         Retorna próximo frame da fila.
         Returns:
-            np.ndarray: Frame do vídeo (920x720)
+            np.ndarray: Frame do vídeo (960x720), ou um frame preto se nenhum chegar em timeout.
+                Para visão computacional/SLAM prefira get_frame_stamped(), que não devolve frames pretos.
         """
         try:
             return self.q.get(timeout=timeout)
         except Empty:
             # Retorna um frame preto
             return np.zeros((self.image_size[1], self.image_size[0], 3), dtype=np.uint8)
+
+    def get_frame_stamped(self, timeout: float = 1.0) -> tuple[np.ndarray, float] | None:
+        """
+        Espera um frame mais novo que o último entregue por este método e o retorna com seu timestamp.
+        Nunca devolve o mesmo frame duas vezes nem um frame preto.
+        Args:
+            timeout (float): Tempo máximo de espera em segundos.
+        Returns:
+            tuple: (frame BGR uint8 HxWx3, stamp) onde stamp é time.time() no instante em que o frame
+                foi lido do stream (não inclui a latência do Wi-Fi e da decodificação), ou None se
+                nenhum frame novo chegar em timeout.
+        """
+        with self.frame_cond:
+            last_seq = self._stamped_seq
+            if not self.frame_cond.wait_for(lambda: self.frame_seq > last_seq, timeout=timeout):
+                return None
+            self._stamped_seq = self.frame_seq
+            return self.frame, self.frame_stamp
 
     def stop_communication(self) -> None:
         """Para threads e fecha sockets."""
@@ -459,11 +505,34 @@ class TelloZune:
             forward_backward_velocity: -100~100 (forward/backward)
             up_down_velocity: -100~100 (up/down)
             yaw_velocity: -100~100 (yaw)
+        Valores fora de -100~100 são saturados e floats são arredondados para int.
         """
         if time.time() - self.last_rc_control_timestamp > self.TIME_BTW_RC_CONTROL_COMMANDS:
             self.last_rc_control_timestamp = time.time()
-            cmd = f'rc {left_right_velocity} {forward_backward_velocity} {up_down_velocity} {yaw_velocity}'
+            values = [max(-100, min(100, int(round(v)))) for v in
+                      (left_right_velocity, forward_backward_velocity, up_down_velocity, yaw_velocity)]
+            self.rc_is_moving = any(values)
+            cmd = 'rc {} {} {} {}'.format(*values)
             self.send_cmd(cmd)
+
+    def set_rc_watchdog(self, timeout: float | None) -> None:
+        """
+        Ativa o watchdog do rc: se nenhum send_rc_control() chegar em timeout segundos enquanto o drone
+        se move, envia 'rc 0 0 0 0' para ele parar e pairar. Útil quando o programa que envia rc trava.
+        A verificação roda na thread de comandos periódicos (a cada 0.1 s), então só funciona após
+        start_tello()/start_communication().
+        Args:
+            timeout (float | None): Tempo em segundos, ou None para desativar.
+        """
+        self.rc_watchdog_timeout = timeout
+
+    def _check_rc_watchdog(self) -> None:
+        """Envia 'rc 0 0 0 0' se o watchdog estiver ativo e o último rc em movimento estiver velho."""
+        if self.rc_watchdog_timeout is None or not self.rc_is_moving:
+            return
+        if time.time() - self.last_rc_control_timestamp > self.rc_watchdog_timeout:
+            print("Watchdog do rc: nenhum comando recente, parando o drone.")
+            self.send_rc_control(0, 0, 0, 0)
 
     def takeoff(self) -> None:
         """Decola o drone."""
@@ -537,8 +606,27 @@ class TelloZune:
         state = self.state_value
         if key in state:
             index = state.index(key) + 1
-            return state[index]
+            if index < len(state):
+                return state[index]
         return ""
+
+    def get_state(self) -> dict[str, float]:
+        """
+        Retorna todos os campos numéricos do último pacote de estado, nas unidades do SDK do Tello
+        (pitch/roll/yaw em graus, tof/h em cm, agx/agy/agz em 0.001 g, bat em %; a unidade de
+        vgx/vgy/vgz não é documentada pelo SDK e costuma ser dm/s, confira antes de usar).
+        Campos não numéricos ou ausentes são ignorados. O instante de chegada está em state_stamp.
+        Returns:
+            dict: Ex. {'pitch': 0.0, 'roll': 1.0, 'yaw': -90.0, 'tof': 85.0, 'bat': 80.0, ...}
+        """
+        state = self.state_value
+        fields: dict[str, float] = {}
+        for key, val in zip(state[0::2], state[1::2]):
+            try:
+                fields[key] = float(val)
+            except ValueError:
+                continue
+        return fields
 
     def get_battery(self) -> int:
         """
