@@ -45,6 +45,11 @@ Aqui estão algumas das funções mais úteis para controlar o Tello programatic
 * `add_command(cmd: str)`: Enfileira um comando oficial do SDK do Tello (ex: `up 50`, `flip b`) para ser executado de forma segura na próxima janela disponível.
 * `get_speed() -> tuple`: Retorna a velocidade atual em tempo real nos eixos X, Y e Z `(vx, vy, vz)` em cm/s.
 * `get_battery() -> int`: Retorna a porcentagem atual da bateria (0-100).
+* `get_frame() -> np.ndarray`: Retorna o frame mais recente do vídeo, ou um frame preto se nenhum chegar no timeout.
+* `get_frame_stamped(timeout) -> (frame, stamp) | None`: Retorna um frame novo junto com o `time.time()` em que foi lido do stream, ou `None` se nenhum frame novo chegar. Nunca repete frames nem devolve frame preto; indicado para visão computacional, SLAM e ROS.
+* `get_state() -> dict`: Retorna todos os campos numéricos do último pacote de estado (atitude em graus, `tof`/`h` em cm, etc.). O instante de chegada fica em `state_stamp`.
+* `send_rc_control(lr, fb, ud, yaw)`: Envia velocidades de -100 a 100; valores fora da faixa são saturados.
+* `set_rc_watchdog(timeout)`: Se nenhum `send_rc_control()` chegar em `timeout` segundos enquanto o drone se move, envia `rc 0 0 0 0` para ele pairar. `None` desativa (padrão).
 * `emergency_stop()`: Esvazia a fila de comandos imediatamente e corta os motores do drone. Ideal para evitar colisões iminentes.
 * `clear_command_queue()`: Limpa todos os comandos pendentes na fila sem derrubar o drone.
 * `end_tello()`: Pousa o drone com retentativas automáticas em caso de falha na rede, encerra o streaming de vídeo e fecha os sockets de comunicação corretamente.
