@@ -1,9 +1,9 @@
 import cv2
-import numpy as np
-from tello_zune import TelloZune
-
 import modules.tello_control as tello_control
+import numpy as np
 from ui.display_utils import write_info
+
+from tello_zune import TelloZune
 
 # Inicialização
 tello = TelloZune(simulate=True, text_input=True) # Cria objeto da classe TelloZune
