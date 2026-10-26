@@ -4,7 +4,7 @@ from tello_zune import TelloZune
 tello = TelloZune()
 tello.start_tello() 
 fourcc = cv2.VideoWriter_fourcc(*'XVID') 
-video = cv2.VideoWriter('output.avi', fourcc, 30.0, (544, 306)) 
+video = cv2.VideoWriter('output.avi', fourcc, 30.0, tello.image_size) # Mesmo tamanho dos frames, senão o arquivo sai vazio
 
 while True: 
     frame = tello.get_frame()
