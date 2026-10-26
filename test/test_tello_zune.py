@@ -185,5 +185,96 @@ class TestTelloZune(unittest.TestCase):
         self.tello._check_rc_watchdog()
         self.mock_sock_cmd.sendto.assert_not_called()
 
+    @patch.object(TelloZune, 'send_cmd_return', return_value='ok')
+    def test_route_active_until_executed(self, mock_send_cmd_return):
+        """is_route_active só volta a False quando a fila executa o último comando da rota."""
+        self.tello._execute_route(["forward 50", "cw 90"], interval=0)
+        self.assertTrue(self.tello.is_route_active)
+        self.assertEqual(list(self.tello.command_queue.queue),
+                         ["forward 50", "cw 90", TelloZune.ROUTE_END_CMD])
+
+        self.tello._read_queue() # forward 50
+        self.tello._read_queue() # cw 90
+        self.assertTrue(self.tello.is_route_active)
+        self.tello._read_queue() # marcador de fim
+        self.assertFalse(self.tello.is_route_active)
+        # O marcador não é enviado ao drone
+        self.assertEqual([c.args[0] for c in mock_send_cmd_return.call_args_list], ["forward 50", "cw 90"])
+
+    def test_clear_command_queue_releases_route(self):
+        """Limpar a fila descarta o marcador de fim, então libera a rota."""
+        self.tello._execute_route(["forward 50", "cw 90"], interval=0)
+        self.tello.clear_command_queue()
+        self.assertFalse(self.tello.is_route_active)
+
+    @patch('tello_zune.tello_zune.threading.Thread')
+    def test_periodic_route_with_zero_interval(self, mock_thread):
+        """Rota periódica com interval=0 dispara, e não dispara de novo enquanto estiver ativa."""
+        self.tello.event_list = [] # Sem keep alive, para isolar o teste
+        self.tello.add_periodic_event("forward 50 e cw 90", 1, "Rota", interval=0)
+
+        self.tello._periodic_cmd()
+        mock_thread.assert_called_once()
+        self.assertEqual(mock_thread.call_args.kwargs['args'], (['forward 50', 'cw 90'], 0))
+        self.assertTrue(self.tello.is_route_active)
+
+        self.tello._periodic_cmd() # Rota ainda ativa: não dispara outra
+        mock_thread.assert_called_once()
+
+    def test_remove_periodic_event(self):
+        """remove_periodic_event aceita string ou lista e nunca remove o keep alive."""
+        self.tello.add_periodic_event("forward 50 e cw 90", 100, "Rota")
+        self.tello.add_periodic_event("battery?", 100, "Bateria")
+
+        self.tello.remove_periodic_event("forward 50 e cw 90")
+        self.assertEqual([ev['commands'] for ev in self.tello.event_list], [['command'], ['battery?']])
+
+        self.tello.remove_periodic_event(["battery?"])
+        self.tello.remove_periodic_event("command")
+        self.assertEqual([ev['commands'] for ev in self.tello.event_list], [['command']])
+
+    @patch.object(TelloZune, 'send_cmd_return', return_value='ok')
+    def test_takeoff_long_timeout(self, mock_send_cmd_return):
+        """takeoff na fila espera a resposta por 8 s, como os movimentos."""
+        self.tello.add_command("takeoff")
+        self.tello._read_queue()
+        mock_send_cmd_return.assert_called_once_with("takeoff", timeout=8.0)
+
+    def test_text_emergency_skips_queue(self):
+        """'emergency' no modo texto é enviado na hora e esvazia a fila."""
+        self.tello.add_command("forward 100")
+        self.tello._process_text_command("emergency")
+        self.mock_sock_cmd.sendto.assert_called_once_with(b'emergency', ('192.168.10.1', 8889))
+        self.assertEqual(self.tello.command_queue.qsize(), 0)
+
+    @patch.object(TelloZune, 'stop_video')
+    @patch.object(TelloZune, 'land')
+    def test_end_tello_lands(self, mock_land, mock_stop_video):
+        """end_tello pousa se o drone estiver no ar ou sem telemetria, e não pousa se estiver no chão."""
+        casos = [
+            # (ready, state_value, land, deve_pousar)
+            (True, ['h', '50'], True, True),     # no ar
+            (True, [], True, True),              # sem telemetria: pousa por segurança
+            (True, ['h', '0'], True, False),     # no chão
+            (False, ['h', '50'], True, False),   # nunca conectou
+            (True, ['h', '50'], False, False),   # land=False
+        ]
+        for ready, state, land, deve_pousar in casos:
+            with self.subTest(ready=ready, state=state, land=land):
+                mock_land.reset_mock()
+                self.tello.ready = ready
+                self.tello.state_value = state
+                self.tello.end_tello(land=land)
+                self.assertEqual(mock_land.called, deve_pousar)
+
+    def test_is_flying(self):
+        """is_flying usa a altura 'h' da telemetria."""
+        self.tello.state_value = ['h', '30']
+        self.assertTrue(self.tello.is_flying())
+        self.tello.state_value = ['h', '0']
+        self.assertFalse(self.tello.is_flying())
+        self.tello.state_value = []
+        self.assertIsNone(self.tello.is_flying())
+
 if __name__ == '__main__':
     unittest.main()

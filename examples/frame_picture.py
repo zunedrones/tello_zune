@@ -1,6 +1,5 @@
 import cv2
 from tello_zune import TelloZune
-import time
 
 # inicializa e conecta com o Tello
 tello = TelloZune()
