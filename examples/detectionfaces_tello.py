@@ -19,7 +19,7 @@ while True:
     if len(detections) >= 1:
         print(f"Rostos detectados: {len(detections)}")
     else:
-        print(f"Rostos detectados: 0")
+        print("Rostos detectados: 0")
 
     # desenha a bounding box no frame 
     for x, y, w, h in detections:

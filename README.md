@@ -15,7 +15,7 @@ A Tello Zune gerencia filas de comandos assíncronas, faz monitoramento contínu
 
 ## Pré-requisitos e Instalação
 
-Certifique-se de ter o Python 3 instalado. As dependências principais da biblioteca estão no requirements.txt.
+Certifique-se de ter o Python 3.10 ou mais novo instalado. As dependências principais da biblioteca estão no requirements.txt.
 
 Instale a Tello Zune:
 ```bash
