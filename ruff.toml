@@ -1,0 +1,10 @@
+target-version = "py310"
+
+[lint]
+# E9: erros de sintaxe; F: pyflakes (nomes indefinidos, imports não usados, etc.).
+# Regras de estilo ficam desligadas de propósito.
+select = ["E9", "F"]
+
+[lint.per-file-ignores]
+# Imports usados pelos testes dos PRs abertos (#34, #35); reavaliar depois do merge deles
+"test/*" = ["F401"]
