@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tello-zune"
+version = "0.7.7"
+description = "Biblioteca tello-zune, serve para controlar, e obter informacoes do drone DJI Tello."
+readme = "README.md"
+license = { text = "GPL-3.0-only" }
+authors = [
+    { name = "Zune Drones", email = "zunedrones@gmail.com" }
+]
+requires-python = ">=3.9,<3.13"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "numpy>=1.26.4,<2",
+    "opencv-python>=4.11.0.86",
+]
+
+[project.urls]
+Homepage = "https://github.com/zunedrones/tello_zune"
+
+[tool.setuptools.packages.find]
+include = ["tello_zune*"]

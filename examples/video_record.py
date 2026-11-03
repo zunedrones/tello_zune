@@ -1,4 +1,5 @@
-import cv2 
+import cv2
+
 from tello_zune import TelloZune
 
 tello = TelloZune()
