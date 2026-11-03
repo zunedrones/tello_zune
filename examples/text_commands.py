@@ -2,9 +2,8 @@ import cv2
 
 from tello_zune.tello_zune import TelloZune
 
-tello = TelloZune() # Cria objeto da classe TelloZune
-tello.start_tello() # Inicia a comunicação com o drone
-tello.enable_text_input = True # Habilita o input de texto para enviar comandos manualmente
+tello = TelloZune(text_input=True) # Cria objeto da classe TelloZune com input de texto para enviar comandos manualmente
+tello.start_tello() # Inicia a comunicação com o drone (e a entrada de texto)
 
 try:
     while True:

@@ -15,7 +15,7 @@ A Tello Zune gerencia filas de comandos assíncronas, faz monitoramento contínu
 
 ## Pré-requisitos e Instalação
 
-Certifique-se de ter o Python 3 instalado. As dependências principais da biblioteca estão no requirements.txt.
+Certifique-se de ter o Python 3.10 ou mais novo instalado. As dependências principais da biblioteca estão no requirements.txt.
 
 Instale a Tello Zune:
 ```bash
@@ -52,7 +52,9 @@ Aqui estão algumas das funções mais úteis para controlar o Tello programatic
 * `set_rc_watchdog(timeout)`: Se nenhum `send_rc_control()` chegar em `timeout` segundos enquanto o drone se move, envia `rc 0 0 0 0` para ele pairar. `None` desativa (padrão).
 * `emergency_stop()`: Esvazia a fila de comandos imediatamente e corta os motores do drone. Ideal para evitar colisões iminentes.
 * `clear_command_queue()`: Limpa todos os comandos pendentes na fila sem derrubar o drone.
-* `end_tello()`: Pousa o drone com retentativas automáticas em caso de falha na rede, encerra o streaming de vídeo e fecha os sockets de comunicação corretamente.
+* `end_tello(land=True)`: Pousa o drone com retentativas automáticas em caso de falha na rede (a menos que a telemetria indique que ele já está no chão), encerra o streaming de vídeo e fecha os sockets de comunicação corretamente. Use `land=False` para só encerrar a comunicação.
+* `is_flying() -> bool | None`: Indica se o drone está no ar pela altura `h` da telemetria; `None` se ainda não há telemetria.
+* `add_periodic_event(cmd, period, info, interval)` / `remove_periodic_event(cmd)`: Comandos ou rotas (`"forward 50 e cw 90"`) repetidos a cada `period` ciclos de 0,1 s. Uma rota só é disparada de novo depois que a anterior terminou de executar.
 
 ## Estrutura e Testes
 

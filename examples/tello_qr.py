@@ -31,16 +31,13 @@ def process(frame: cv2.Mat) -> cv2.Mat:
 
 while True:
     #ret, frame = cap.read()
-    ret, frame = tello.get_frame()
-    battery, height, temperature, pressure, time = tello.get_info()
+    frame = tello.get_frame() # Retorna apenas o frame (preto se o vídeo não chegar)
+    battery, height, temperature, baro, time = tello.get_info()
     cv2.putText(frame, f'Battery: {battery}%', (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
     cv2.putText(frame, f'Height: {height}cm', (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
     cv2.putText(frame, f'Temperature: {temperature}C', (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-    cv2.putText(frame, f'Pressure: {pressure}Pa', (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+    cv2.putText(frame, f'Baro: {baro}cm', (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
     cv2.putText(frame, f'Time: {time}s', (10, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-    if not ret:
-        print('erro na captura do frame')
-        break
     processed_frame = process(frame)
     cv2.imshow('QR Code', processed_frame)
     if cv2.waitKey(1) & 0xFF == ord('q'):

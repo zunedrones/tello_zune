@@ -29,6 +29,11 @@ class TelloZune:
     Args:
         text_input (bool, optional): Se True, aceita comandos de texto via terminal. Padrão: False.
     """
+    # Pseudo-comando interno que marca o fim de uma rota periódica na fila (não é enviado ao drone)
+    ROUTE_END_CMD = "route_end"
+    # Comandos que podem demorar vários segundos para o drone responder 'ok'
+    LONG_COMMANDS = ['forward', 'back', 'left', 'right', 'up', 'down', 'cw', 'ccw', 'takeoff', 'land']
+
     def __init__(
         self,
         TELLOIP: str = '192.168.10.1',
@@ -113,7 +118,8 @@ class TelloZune:
 
     def _execute_route(self, commands: list, interval: int=0) -> None:
         """
-        Executa uma sequência de comandos (rota) em sua própria thread.
+        Enfileira uma sequência de comandos (rota) em sua própria thread.
+        is_route_active fica True até a fila executar o último comando da rota.
         Args:
             commands (list): A lista de comandos a serem executados.
             interval (int): O tempo de espera em segundos entre cada comando.
@@ -121,17 +127,16 @@ class TelloZune:
         self.is_route_active = True
         try:
             for i, cmd in enumerate(commands):
-                print(f"Executando passo {i + 1}/{len(commands)} da rota: '{cmd}'")
+                print(f"Enfileirando passo {i + 1}/{len(commands)} da rota: '{cmd}'")
                 self.add_command(cmd)
 
                 # Se não for o último comando e houver intervalo, manda o comando "delay"
                 if i < len(commands) - 1 and interval > 0:
                     self.add_command(f"delay {interval}")
+            # Marca o fim da rota; _read_queue libera is_route_active ao chegar nele
+            self.add_command(self.ROUTE_END_CMD)
         except Exception as e:
             print(f"Erro ao executar a rota: {e}")
-        finally:
-            # Garante que a flag seja liberada, mesmo que ocorra um erro
-            print("Rota finalizada.")
             self.is_route_active = False
 
     def _video(self) -> None:
@@ -195,9 +200,12 @@ class TelloZune:
                         continue # Pula a execução deste evento
 
                     # Execução normal
-                    # Trata como rota se tiver mais de um comando, nenhuma rota estiver ativa e o intervalo for maior que 0
-                    if len(ev['commands']) > 1 and not self.is_route_active and ev['interval'] > 0:
+                    # Trata como rota se tiver mais de um comando e nenhuma rota estiver ativa (na fila ou executando)
+                    if len(ev['commands']) > 1:
+                        if self.is_route_active:
+                            continue
                         print(f"Disparando rota periódica: {ev.get('info', 'N/A')}")
+                        self.is_route_active = True # Marca já aqui para o próximo ciclo não disparar de novo
                         threading.Thread(
                             target=self._execute_route,
                             args=(ev['commands'], ev.get('interval')),
@@ -252,7 +260,12 @@ class TelloZune:
                 time.sleep(seconds)
                 return
 
-            timeout = 8.0 if cmd.split()[0] in ['forward','back','left','right','up','down','cw','ccw'] else 2.0
+            if cmd == self.ROUTE_END_CMD: # Último comando da rota periódica já foi executado
+                print("Rota finalizada.")
+                self.is_route_active = False
+                return
+
+            timeout = 8.0 if cmd.split()[0] in self.LONG_COMMANDS else 2.0
             resp = self.send_cmd_return(cmd, timeout=timeout)
 
             print(f"{cmd}\t{resp}")
@@ -291,7 +304,7 @@ class TelloZune:
         elif base_cmd == 'land':
             self.land()
         elif base_cmd == 'emergency':
-            self.add_command('emergency')
+            self.emergency_stop() # Direto, sem esperar os comandos que estão na fila
         # Comandos com 1 argumento (distância ou graus)
         elif base_cmd in ['up', 'down', 'left', 'right', 'forward', 'back', 'cw', 'ccw']:
             if len(parts) == 2:
@@ -316,9 +329,10 @@ class TelloZune:
         """
         Adiciona evento periódico.
         Args:
-            cmd (str): Comando a ser enviado
-            period (int): Período em frames
+            cmd (str): Comando a ser enviado, ou vários separados por ' e ' (rota). Ex: "forward 50 e cw 90"
+            period (int): Período em ciclos de 0.1 s (ex: 100 = a cada 10 s)
             info (str): Informação adicional
+            interval (int): Segundos entre os comandos de uma rota (0 = sem espera)
         """
         # Divide a rota em comandos individuais. Ex: "forward 100 e cw 90" -> ['forward 100', 'cw 90']
         command_list = [c.strip() for c in cmd.split(' e ')]
@@ -330,15 +344,20 @@ class TelloZune:
             'interval': int(interval), # Intervalo em segundos
             'info': str(info)
         })
-        print(f"Evento periódico adicionado: {info}, período: {period} frames, comandos: {command_list}")
+        print(f"Evento periódico adicionado: {info}, período: {period} ciclos de 0.1 s, comandos: {command_list}")
 
-    def remove_periodic_event(self, cmd: str) -> None:
+    def remove_periodic_event(self, cmd: str | list[str]) -> None:
         """
-        Remove evento periódico.
+        Remove evento periódico. O keep alive nunca é removido.
         Args:
-            cmd (str): Comando a ser removido
+            cmd (str | list[str]): Comando(s) do evento, no mesmo formato usado em add_periodic_event
+                (ex: "forward 50 e cw 90") ou como lista (ex: ['forward 50', 'cw 90'])
         """
-        self.event_list = [ev for ev in self.event_list if ev['commands'] != cmd]
+        commands = [c.strip() for c in cmd.split(' e ')] if isinstance(cmd, str) else list(cmd)
+        self.event_list = [
+            ev for ev in self.event_list
+            if ev['commands'] != commands or ev['commands'] == ['command']
+        ]
 
     def remove_last_event(self, qtd: int=1) -> list[dict] | None:
         """
@@ -590,8 +609,28 @@ class TelloZune:
         h2 = float(self.get_state_field('tof'))
         return abs(h2 - h1) > height_threshold
 
-    def end_tello(self) -> None:
-        """Finaliza o drone Tello. Pousa se possivel, encerra o video e a comunicacao."""
+    def is_flying(self) -> bool | None:
+        """
+        Indica se o drone está no ar, pela altura 'h' (relativa à decolagem) da telemetria.
+        Returns:
+            bool | None: True se h > 0, False se h == 0, None se ainda não há telemetria.
+        """
+        try:
+            return float(self.get_state_field('h')) > 0
+        except ValueError:
+            return None
+
+    def end_tello(self, land: bool = True) -> None:
+        """
+        Finaliza o drone Tello. Pousa se possivel, encerra o video e a comunicacao.
+        Args:
+            land (bool): Se True (padrão), para o drone e pousa antes de encerrar, a menos que a
+                telemetria indique que ele já está no chão. Sem telemetria, tenta pousar por segurança.
+        """
+        if land and self.ready and self.is_flying() is not False:
+            self.clear_command_queue()
+            self.send_rc_control(0, 0, 0, 0)
+            self.land()
         self.stop_video()
         self.stop_communication()
 
@@ -683,6 +722,7 @@ class TelloZune:
         """Limpa a fila de comandos"""
         with self.command_queue.mutex:
             self.command_queue.queue.clear()
+        self.is_route_active = False # O marcador de fim de rota também foi descartado
         print("Fila de comandos limpa.")
 
     def emergency_stop(self):
