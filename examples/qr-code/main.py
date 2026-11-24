@@ -1,7 +1,6 @@
 import cv2
 import modules.tello_control as tello_control
 import numpy as np
-from ui.display_utils import write_info
 
 from tello_zune import TelloZune
 
