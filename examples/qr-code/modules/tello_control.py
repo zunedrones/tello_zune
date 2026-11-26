@@ -1,7 +1,8 @@
-import time
 import threading
-from .tracking_base import follow, draw
+import time
+
 from .qr_processing import process
+from .tracking_base import draw, follow
 
 old_move = ''
 following_qr = False

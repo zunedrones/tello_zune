@@ -1,9 +1,11 @@
-import time
-import threading
-import numpy as np
 import socket
+import threading
+import time
+from queue import Empty, Queue
+
 import cv2
-from queue import Queue, Empty
+import numpy as np
+
 
 class SafeThread(threading.Thread):
     """
@@ -214,6 +216,8 @@ class TelloZune:
                     
                     # Trata como comando simples se tiver exatamente um comando
                     elif len(ev['commands']) == 1:
+                        if is_keep_alive_event and (self.current_command is not None or not self.command_queue.empty()):
+                            continue
                         cmd = ev['commands'][0]
                         self.add_command(cmd)
 
@@ -229,17 +233,25 @@ class TelloZune:
         """Recebe strings de resposta de comando via socket UDP."""
         try:
             data, _ = self.sock_cmd.recvfrom(2048)
-            self.udp_cmd_ret = data.decode("utf-8")
-            self.cmd_recv_ev.set()
+            if data.startswith(b'\xcc'):
+                return  # Ignora pacotes binários do protocolo nativo do Tello
+            try:
+                decoded = data.decode("utf-8").strip()
+            except UnicodeDecodeError:
+                return  # Ignora pacotes não-UTF-8
+            if decoded:
+                self.udp_cmd_ret = decoded
+                self.cmd_recv_ev.set()
         except Exception as e:
-            print(f"Erro na thread de recebimento de comando: {e}")
+            if not self.receiverThread.stop_ev.is_set():
+                print(f"Erro na thread de recebimento de comando: {e}")
 
     def _state_receive(self) -> None:
         """Recebe strings de estado via socket UDP e atualiza state_value e state_list."""
         try:
             data, _ = self.sock_state.recvfrom(512)
             self.state_stamp = time.time()
-            val = data.decode("utf-8").rstrip()
+            val = data.decode("utf-8", errors="ignore").rstrip()
             self.state_value = val.replace(';', ':').split(':')
             for state in self.state_list:
                 if self.state_count % state['period'] == 0:
@@ -247,7 +259,8 @@ class TelloZune:
                     state['val'] = raw.rstrip()
             self.state_count += 1
         except Exception as e:
-            print(f"Erro na thread de estado: {e}")
+            if not self.stateThread.stop_ev.is_set():
+                print(f"Erro na thread de estado: {e}")
 
     def _read_queue(self):
         """Lê comandos da fila, envia ao drone e exibe resposta."""
@@ -265,13 +278,16 @@ class TelloZune:
                 self.is_route_active = False
                 return
 
-            timeout = 8.0 if cmd.split()[0] in self.LONG_COMMANDS else 2.0
+            timeout = 8.0 if cmd.split()[0].lower() in self.LONG_COMMANDS else 2.0
+
             resp = self.send_cmd_return(cmd, timeout=timeout)
 
             print(f"{cmd}\t{resp}")
             time.sleep(0.01)
         except Empty:
             return
+        finally:
+            self.current_command = None
 
     def _text_input(self) -> None:
         """Thread que lê comandos de texto do terminal."""
@@ -294,7 +310,7 @@ class TelloZune:
         Args:
             cmd (str): Comando de texto a ser processado
         """
-        if not cmd:
+        if not cmd or not cmd.strip():
             return
         parts = cmd.strip().lower().split()
         base_cmd = parts[0]
@@ -307,10 +323,10 @@ class TelloZune:
             self.emergency_stop() # Direto, sem esperar os comandos que estão na fila
         # Comandos com 1 argumento (distância ou graus)
         elif base_cmd in ['up', 'down', 'left', 'right', 'forward', 'back', 'cw', 'ccw']:
-            if len(parts) == 2:
-                self.add_command(cmd)
+            if len(parts) == 2 and parts[1].isdigit():
+                self.add_command(f"{base_cmd} {parts[1]}")
             else:
-                print(f"Erro: O comando '{base_cmd}' requer um valor (ex: '{base_cmd} 50').")
+                print(f"Erro: O comando '{base_cmd}' requer um valor numérico (ex: '{base_cmd} 50').")
         else: # Nenhum dos anteriores, trata como comando desconhecido
             print(f"Comando desconhecido: '{base_cmd}'")
 
@@ -321,6 +337,8 @@ class TelloZune:
             command (str): Comando a ser enfileirado
         """
         try:
+            if command != 'command':
+                self.cmd_count = 1  # Reinicia contador de keep-alive ao enfileirar comando real
             self.command_queue.put(command)
         except Exception as e:
             print(f"Erro ao adicionar comando: {e}")
@@ -438,7 +456,7 @@ class TelloZune:
 
     def start_video(self) -> None:
         """Inicia a transmissão de vídeo do Tello."""
-        self.send_cmd('streamon')
+        self.send_cmd_return('streamon', timeout=2.0)
 
         time.sleep(1)
 
@@ -450,7 +468,7 @@ class TelloZune:
 
     def stop_video(self) -> None:
         """Stop video stream"""
-        self.send_cmd('streamoff')
+        self.send_cmd_return('streamoff', timeout=2.0)
         self.videoThread.stop()
 
     def wait_till_connected(self, timeout: int = 10) -> bool:
@@ -495,6 +513,8 @@ class TelloZune:
             str: Resposta do drone. Verifique a documentação do SDK do Tello para os comandos válidos.
         """
         with self.cmd_lock:
+            if cmd != 'command':
+                self.cmd_count = 1
             self.cmd_recv_ev.clear()
             self.udp_cmd_ret = ""
             
@@ -526,6 +546,8 @@ class TelloZune:
             yaw_velocity: -100~100 (yaw)
         Valores fora de -100~100 são saturados e floats são arredondados para int.
         """
+        if self.current_command is not None or not self.command_queue.empty():
+            return
         if time.time() - self.last_rc_control_timestamp > self.TIME_BTW_RC_CONTROL_COMMANDS:
             self.last_rc_control_timestamp = time.time()
             values = [max(-100, min(100, int(round(v)))) for v in
@@ -562,14 +584,15 @@ class TelloZune:
     def land(self) -> None:
         """Pousa o drone."""
         print("Pousando")
-        answer = self.send_cmd_return("land", timeout=5.0) # Bom dar um timeout maior no pouso
+        self.clear_command_queue()
+        answer = self.send_cmd_return("land", timeout=15.0) # Bom dar um timeout maior no pouso
         trys = 0
         max_trys = 3
         
         while answer != 'ok' and trys < max_trys:
             print(f"Resposta inesperada para 'land': '{answer}'. Tentando novamente...")
             time.sleep(1)
-            answer = self.send_cmd_return("land", timeout=5.0)
+            answer = self.send_cmd_return("land", timeout=15.0)
             trys += 1
             
         if answer != 'ok':
