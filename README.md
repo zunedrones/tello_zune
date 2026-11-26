@@ -1,4 +1,4 @@
-# Tello Zune (v0.7.7)
+# Tello Zune (v0.7.8)
 
 Uma biblioteca Python orientada a eventos thread-safe para o controle, leitura de telemetria e streaming de vídeo do drone DJI Tello. 
 

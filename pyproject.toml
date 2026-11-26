@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tello-zune"
-version = "0.7.7"
+version = "0.7.8"
 description = "Biblioteca tello-zune, serve para controlar, e obter informacoes do drone DJI Tello."
 readme = "README.md"
 license = { text = "GPL-3.0-only" }
@@ -18,7 +18,7 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "numpy>=1.26.4,<2",
+    "numpy>=1.26.4",
     "opencv-python>=4.11.0.86",
 ]
 

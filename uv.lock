@@ -64,7 +64,7 @@ wheels = [
 
 [[package]]
 name = "tello-zune"
-version = "0.7.7"
+version = "0.7.8"
 source = { editable = "." }
 dependencies = [
     { name = "numpy" },
@@ -73,6 +73,6 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "numpy", specifier = ">=1.26.4,<2" },
+    { name = "numpy", specifier = ">=1.26.4" },
     { name = "opencv-python", specifier = ">=4.11.0.86" },
 ]
