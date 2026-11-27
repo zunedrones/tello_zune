@@ -1,4 +1,6 @@
+import os
 import socket
+import sys
 import threading
 import time
 from queue import Empty, Queue
@@ -33,8 +35,14 @@ class TelloZune:
     """
     # Pseudo-comando interno que marca o fim de uma rota periódica na fila (não é enviado ao drone)
     ROUTE_END_CMD = "route_end"
+    # Pseudo-comando que pede o encerramento do programa quando a fila chega nele (não é enviado ao drone)
+    END_CMD = "end"
     # Comandos que podem demorar vários segundos para o drone responder 'ok'
     LONG_COMMANDS = ['forward', 'back', 'left', 'right', 'up', 'down', 'cw', 'ccw', 'takeoff', 'land']
+    # Timeouts do VideoCapture (FFmpeg). Sem eles o read() fica até 30 s bloqueado quando o stream para,
+    # e o Python aborta (core dump) se sair com a thread de vídeo presa dentro do OpenCV.
+    VIDEO_OPEN_TIMEOUT_MS = 5000
+    VIDEO_READ_TIMEOUT_MS = 2000
 
     def __init__(
         self,
@@ -76,6 +84,10 @@ class TelloZune:
         self.frame_seq = 0 # Incrementa a cada frame novo
         self._stamped_seq = 0 # Último frame_seq entregue por get_frame_stamped()
         self.frame_cond = threading.Condition()
+        self._last_frame_ok = 0.0 # time.time() do último read() bem-sucedido, para detectar stream parado
+
+        # Sinaliza que o comando 'end' foi executado pela fila; o programa deve sair e chamar end_tello()
+        self.end_event = threading.Event()
 
         # Estado recebido pela porta 8890
         self.state_stamp: float | None = None # time.time() quando o último pacote de estado chegou
@@ -117,6 +129,7 @@ class TelloZune:
 
         # Inicialização
         self.enable_text_input = text_input
+        self._stdin_buf = "" # Texto lido do terminal que ainda não formou uma linha completa
 
     def _execute_route(self, commands: list, interval: int=0) -> None:
         """
@@ -148,6 +161,7 @@ class TelloZune:
                 ret, frame = self.video.read()
                 if ret:
                     stamp = time.time()
+                    self._last_frame_ok = stamp
                     if (frame.shape[1], frame.shape[0]) != tuple(self.image_size):
                         frame = cv2.resize(frame, self.image_size)
                     with self.frame_cond:
@@ -161,6 +175,15 @@ class TelloZune:
                     except Empty:
                         pass
                     self.q.put(frame)
+                elif time.time() - self._last_frame_ok > self.VIDEO_READ_TIMEOUT_MS / 1000:
+                    # Depois de um timeout de leitura o VideoCapture do FFmpeg não volta a entregar frames,
+                    # mesmo que o stream volte: é preciso reabrir.
+                    if self.videoThread.stop_ev.is_set():
+                        return
+                    print("Vídeo sem frames, reabrindo o stream...")
+                    self.video.release()
+                    self.video = self._open_video()
+                    self._last_frame_ok = time.time() # Dá tempo para o stream novo entregar frames
                 else:
                     time.sleep(0.005) # Evita laço ocupado enquanto o stream não entrega frames
             else:
@@ -278,6 +301,11 @@ class TelloZune:
                 self.is_route_active = False
                 return
 
+            if cmd == self.END_CMD: # Todos os comandos anteriores já foram executados
+                print("Comando 'end': encerramento solicitado.")
+                self.end_event.set()
+                return
+
             timeout = 8.0 if cmd.split()[0].lower() in self.LONG_COMMANDS else 2.0
 
             resp = self.send_cmd_return(cmd, timeout=timeout)
@@ -290,14 +318,25 @@ class TelloZune:
             self.current_command = None
 
     def _text_input(self) -> None:
-        """Thread que lê comandos de texto do terminal."""
+        """
+        Thread que lê comandos de texto do terminal.
+        Lê com os.read() em vez de input(): input() prende o lock do sys.stdin enquanto espera, e o Python
+        aborta ao encerrar ("could not acquire lock for <stdin>") se esta thread daemon ainda estiver nele.
+        """
         try:
-            cmd = input("Comando > ")
-            if cmd.lower() == 'exit':
-                print("Sinal de parada recebido. Encerrando entrada de texto...")
-                self.textInputThread.stop() # Sinaliza para a thread parar
-                return
-            self._process_text_command(cmd) # Para qualquer outro comando, chama o processador
+            print("Comando > ", end="", flush=True)
+            data = os.read(sys.stdin.fileno(), 1024)
+            if not data: # EOF (Ctrl+D ou stdin fechado)
+                raise EOFError
+            self._stdin_buf += data.decode("utf-8", errors="ignore")
+            *lines, self._stdin_buf = self._stdin_buf.split("\n") # Guarda a linha incompleta para a próxima leitura
+            for line in lines:
+                cmd = line.strip()
+                if cmd.lower() == 'exit':
+                    print("Sinal de parada recebido. Encerrando entrada de texto...")
+                    self.textInputThread.stop() # Sinaliza para a thread parar
+                    return
+                self._process_text_command(cmd) # Para qualquer outro comando, chama o processador
         except (KeyboardInterrupt, EOFError):
             print("\nEncerrando entrada de texto...")
             self.textInputThread.stop()
@@ -321,6 +360,11 @@ class TelloZune:
             self.land()
         elif base_cmd == 'emergency':
             self.emergency_stop() # Direto, sem esperar os comandos que estão na fila
+        elif base_cmd == self.END_CMD:
+            # Vai para a fila: encerra depois dos comandos já enfileirados. A entrada de texto continua
+            # ativa até lá, para ainda ser possível mandar 'land' ou 'emergency'.
+            print("Encerramento enfileirado.")
+            self.add_command(self.END_CMD)
         # Comandos com 1 argumento (distância ou graus)
         elif base_cmd in ['up', 'down', 'left', 'right', 'forward', 'back', 'cw', 'ccw']:
             if len(parts) == 2 and parts[1].isdigit():
@@ -454,22 +498,44 @@ class TelloZune:
         if self.movesThread.is_alive() is not True: self.movesThread.start() # Thread de movimentos
         print("Iniciando comunicação")
 
+    def _open_video(self) -> cv2.VideoCapture:
+        """Abre o stream com timeouts, para que read() nunca fique bloqueado por muito tempo."""
+        return cv2.VideoCapture(self.video_source, cv2.CAP_FFMPEG, [
+            cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, self.VIDEO_OPEN_TIMEOUT_MS,
+            cv2.CAP_PROP_READ_TIMEOUT_MSEC, self.VIDEO_READ_TIMEOUT_MS,
+        ])
+
     def start_video(self) -> None:
         """Inicia a transmissão de vídeo do Tello."""
         self.send_cmd_return('streamon', timeout=2.0)
 
         time.sleep(1)
 
-        self.video = cv2.VideoCapture(self.video_source, cv2.CAP_FFMPEG)
+        self.video = self._open_video()
+        self._last_frame_ok = time.time()
 
+        if self.videoThread.stop_ev.is_set() and not self.videoThread.is_alive():
+            self.videoThread = SafeThread(target=self._video) # Uma thread não pode ser iniciada duas vezes
         if not self.videoThread.is_alive():
             self.videoThread.start()
         print("Vídeo iniciado")
 
     def stop_video(self) -> None:
-        """Stop video stream"""
-        self.send_cmd_return('streamoff', timeout=2.0)
+        """
+        Para a thread de vídeo, libera o VideoCapture e desliga o stream do drone.
+        A thread é parada antes do 'streamoff': com o stream ainda ligado, o read() em andamento volta
+        no próximo frame e a thread termina na hora.
+        """
         self.videoThread.stop()
+        if self.videoThread.is_alive() and threading.current_thread() is not self.videoThread:
+            # Pior caso (stream já caído e a thread reabrindo): timeout de abertura + timeout de leitura
+            self.videoThread.join(timeout=(self.VIDEO_OPEN_TIMEOUT_MS + self.VIDEO_READ_TIMEOUT_MS) / 1000 + 1)
+        if self.videoThread.is_alive():
+            print("Aviso: a thread de vídeo não terminou; o VideoCapture não foi liberado.")
+        elif self.video is not None:
+            self.video.release()
+            self.video = None
+        self.send_cmd_return('streamoff', timeout=2.0)
 
     def wait_till_connected(self, timeout: int = 10) -> bool:
         """
@@ -650,12 +716,23 @@ class TelloZune:
             land (bool): Se True (padrão), para o drone e pousa antes de encerrar, a menos que a
                 telemetria indique que ele já está no chão. Sem telemetria, tenta pousar por segurança.
         """
+        self.end_event.set() # Avisa quem ainda checa end_requested() que o drone está sendo finalizado
         if land and self.ready and self.is_flying() is not False:
             self.clear_command_queue()
             self.send_rc_control(0, 0, 0, 0)
             self.land()
         self.stop_video()
         self.stop_communication()
+
+    def end_requested(self) -> bool:
+        """
+        Indica se o encerramento foi pedido: o comando 'end' foi executado pela fila (digitado no modo
+        texto ou enfileirado com add_command('end')) ou end_tello() foi chamado.
+        Use como condição do laço principal e chame end_tello() ao sair dele.
+        Returns:
+            bool: True se o programa deve encerrar.
+        """
+        return self.end_event.is_set()
 
     def get_state_field(self, key: str) -> str:
         """

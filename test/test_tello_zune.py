@@ -287,5 +287,107 @@ class TestTelloZune(unittest.TestCase):
         self.tello._process_text_command("  FORWARD  50 ")
         self.assertEqual(list(self.tello.command_queue.queue), ["forward 50"])
 
+    @patch.object(TelloZune, 'send_cmd_return', return_value='ok')
+    def test_end_command_via_queue(self, mock_send_cmd_return):
+        """'end' no modo texto vai para a fila e só pede o encerramento depois dos comandos anteriores."""
+        self.tello.add_command("forward 50")
+        self.tello._process_text_command("END")
+        self.assertEqual(list(self.tello.command_queue.queue), ["forward 50", TelloZune.END_CMD])
+
+        self.tello._read_queue() # forward 50
+        self.assertFalse(self.tello.end_requested())
+        self.tello._read_queue() # end
+        self.assertTrue(self.tello.end_requested())
+        # 'end' não é enviado ao drone
+        self.assertEqual([c.args[0] for c in mock_send_cmd_return.call_args_list], ["forward 50"])
+
+    @patch.object(TelloZune, 'send_cmd_return', return_value='ok')
+    def test_stop_video_releases_before_streamoff(self, mock_send_cmd_return):
+        """stop_video libera o VideoCapture e só depois manda 'streamoff'."""
+        ordem = MagicMock()
+        video = MagicMock()
+        ordem.attach_mock(video.release, 'release')
+        ordem.attach_mock(mock_send_cmd_return, 'send_cmd_return')
+        self.tello.video = video
+
+        self.tello.stop_video()
+        self.assertEqual([c[0] for c in ordem.mock_calls], ['release', 'send_cmd_return'])
+        mock_send_cmd_return.assert_called_once_with('streamoff', timeout=2.0)
+        self.assertIsNone(self.tello.video)
+
+    @patch.object(TelloZune, 'send_cmd_return', return_value='ok')
+    def test_stop_video_joins_running_thread(self, mock_send_cmd_return):
+        """Com a thread de vídeo lendo frames, stop_video espera ela terminar e libera a captura uma vez."""
+        def read():
+            time.sleep(0.03) # ~30 fps
+            return True, np.zeros((720, 960, 3), dtype=np.uint8)
+        video = MagicMock()
+        video.read.side_effect = read
+        self.tello.video = video
+        self.tello.videoThread.start()
+        time.sleep(0.1)
+
+        t0 = time.time()
+        self.tello.stop_video()
+        self.assertLess(time.time() - t0, 1.0)
+        self.assertFalse(self.tello.videoThread.is_alive())
+        video.release.assert_called_once()
+
+    def test_video_reopens_after_read_timeout(self):
+        """Sem frames por mais que VIDEO_READ_TIMEOUT_MS, a thread de vídeo reabre o stream."""
+        antigo, novo = MagicMock(), MagicMock()
+        antigo.read.return_value = (False, None)
+        self.tello.video = antigo
+
+        with patch.object(TelloZune, '_open_video', return_value=novo) as mock_open:
+            self.tello._last_frame_ok = time.time() # Falha recente: ainda não reabre
+            self.tello._video()
+            mock_open.assert_not_called()
+
+            self.tello._last_frame_ok = time.time() - TelloZune.VIDEO_READ_TIMEOUT_MS / 1000 - 1
+            self.tello._video()
+            mock_open.assert_called_once()
+        antigo.release.assert_called_once()
+        self.assertIs(self.tello.video, novo)
+
+    @patch('tello_zune.tello_zune.time.sleep')
+    @patch.object(TelloZune, 'send_cmd_return', return_value='ok')
+    def test_start_video_after_stop(self, mock_send_cmd_return, mock_sleep):
+        """start_video depois de stop_video cria uma thread de vídeo nova em vez de quebrar."""
+        def abrir():
+            video = MagicMock()
+            video.read.return_value = (False, None)
+            return video
+        with patch.object(TelloZune, '_open_video', side_effect=abrir):
+            self.tello.start_video()
+            primeira = self.tello.videoThread
+            self.tello.stop_video()
+            self.tello.start_video()
+            self.assertIsNot(self.tello.videoThread, primeira)
+            self.assertTrue(self.tello.videoThread.is_alive())
+            self.tello.stop_video()
+        self.assertFalse(self.tello.videoThread.is_alive())
+
+    @patch('tello_zune.tello_zune.os.read')
+    def test_text_input_reads_lines(self, mock_read):
+        """A entrada de texto junta pedaços em linhas, processa cada uma e para no EOF."""
+        mock_read.side_effect = [b"takeoff\nforward 5", b"0\r\nEND\n", b""]
+        with patch.object(TelloZune, 'takeoff') as mock_takeoff:
+            self.tello._text_input()
+            mock_takeoff.assert_called_once()
+        self.assertEqual(list(self.tello.command_queue.queue), [])
+        self.tello._text_input()
+        self.assertEqual(list(self.tello.command_queue.queue), ["forward 50", TelloZune.END_CMD])
+        self.assertFalse(self.tello.textInputThread.stop_ev.is_set())
+        self.tello._text_input() # EOF
+        self.assertTrue(self.tello.textInputThread.stop_ev.is_set())
+
+    @patch.object(TelloZune, 'stop_video')
+    def test_end_tello_sets_end_requested(self, mock_stop_video):
+        """end_tello marca end_requested(), para laços que ainda estejam rodando saírem."""
+        self.assertFalse(self.tello.end_requested())
+        self.tello.end_tello(land=False)
+        self.assertTrue(self.tello.end_requested())
+
 if __name__ == '__main__':
     unittest.main()
