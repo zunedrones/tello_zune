@@ -23,7 +23,7 @@ def write_info(frame: np.ndarray, tello: TelloZune) -> None:
         cv2.putText(frame, line, (10, 30 + 30 * i), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (10, 255, 0), 2)
 
 try:
-    while True:
+    while not tello.end_requested(): # 'end' digitado no terminal encerra o laço
         # Captura
         #ret, frame = cap.read() # Captura de vídeo da webcam
         frame = tello.get_frame()

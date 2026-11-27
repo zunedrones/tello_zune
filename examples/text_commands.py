@@ -4,9 +4,10 @@ from tello_zune.tello_zune import TelloZune
 
 tello = TelloZune(text_input=True) # Cria objeto da classe TelloZune com input de texto para enviar comandos manualmente
 tello.start_tello() # Inicia a comunicação com o drone (e a entrada de texto)
+print("Digite comandos no terminal (ex: takeoff, forward 50, land). 'end' encerra; 'q' na janela também.")
 
 try:
-    while True:
+    while not tello.end_requested(): # 'end' digitado no terminal encerra o laço
         # Captura
         frame = tello.get_frame()
 
